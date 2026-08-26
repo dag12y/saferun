@@ -5,11 +5,23 @@ import (
 	"os/exec"
 )
 
-func Run(command ...string) error {
+func Run(config Config, command ...string) error {
 	args := []string{
 		"run",
 		"--rm",
-		"saferun-node:dev",
+
+		// Security
+		"--cap-drop=ALL",
+		"--security-opt=no-new-privileges",
+
+		// Resource limits
+		"--memory=" + config.Memory,
+		"--cpus=" + config.CPUs,
+
+		// Network
+		"--network=" + config.Network,
+
+		config.Image,
 	}
 
 	args = append(args, command...)
@@ -17,6 +29,7 @@ func Run(command ...string) error {
 	cmd := exec.Command("docker", args...)
 
 	output, err := cmd.CombinedOutput()
+
 	if err != nil {
 		return fmt.Errorf("sandbox failed: %w\n%s", err, output)
 	}

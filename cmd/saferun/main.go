@@ -12,7 +12,14 @@ func main() {
 	fmt.Println("Secure package installation sandbox")
 	fmt.Println()
 
-	if err := sandbox.Run("npm", "install", "lodash"); err != nil {
+	config := sandbox.Config{
+		Image:   "saferun-node:dev",
+		Network: "none",
+		Memory:  "512m",
+		CPUs:    "1",
+	}
+
+	if err := sandbox.Run(config, "node", "-e", "require('https').get('https://example.com')"); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
