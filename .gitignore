@@ -1,0 +1,22 @@
+# Go
+*.exe
+*.test
+*.out
+
+# Build
+/saferun
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Temporary files
+tmp/
+*.log
