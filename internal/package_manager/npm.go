@@ -53,11 +53,7 @@ func (n NPM) Install(args []string) error {
 
 	fmt.Printf("Extracted to: %s\n", packagePath)
 
-	// Static analysis.
-	fmt.Println()
-	fmt.Println("SafeRun Security Report")
-	fmt.Println("-----------------------")
-
+	// Analyze package.json.
 	analysis, err := analyzer.AnalyzePackageJSON(
 		filepath.Join(packagePath, "package.json"),
 	)
@@ -65,7 +61,7 @@ func (n NPM) Install(args []string) error {
 		return err
 	}
 
-	// Convert analyzer findings into risk findings.
+	// Build risk findings.
 	findings := []risk.Finding{}
 
 	if analysis.HasInstallScripts {
@@ -80,12 +76,26 @@ func (n NPM) Install(args []string) error {
 
 	report := risk.Analyze(findings)
 
+	// Security report.
+	fmt.Println()
+	fmt.Println("SafeRun Security Report")
+	fmt.Println("-----------------------")
+
+	fmt.Printf("Package: %s@%s\n\n", pkg.Name, pkg.Version)
+
+	fmt.Println("Metadata")
+	fmt.Printf("  Dependencies: %d\n", analysis.Dependencies)
+	fmt.Printf("  Dev dependencies: %d\n", analysis.DevDependencies)
+
+	fmt.Println()
+	fmt.Println("Lifecycle Scripts")
+
 	if len(report.Findings) == 0 {
-		fmt.Println("✓ No suspicious lifecycle scripts detected")
+		fmt.Println("  ✓ No suspicious lifecycle scripts detected")
 	} else {
 		for _, finding := range report.Findings {
 			fmt.Printf(
-				"⚠ %s [%s]: %s\n",
+				"  ⚠ %s [%s]: %s\n",
 				finding.Name,
 				finding.Severity,
 				finding.Description,

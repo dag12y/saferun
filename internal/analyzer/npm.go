@@ -9,6 +9,8 @@ import (
 type NPMAnalysis struct {
 	HasInstallScripts bool
 	Scripts           map[string]string
+	Dependencies      int
+	DevDependencies   int
 }
 
 func AnalyzePackageJSON(path string) (NPMAnalysis, error) {
@@ -18,7 +20,9 @@ func AnalyzePackageJSON(path string) (NPMAnalysis, error) {
 	}
 
 	var pkg struct {
-		Scripts map[string]string `json:"scripts"`
+		Scripts         map[string]string `json:"scripts"`
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
 	}
 
 	if err := json.Unmarshal(data, &pkg); err != nil {
@@ -37,5 +41,7 @@ func AnalyzePackageJSON(path string) (NPMAnalysis, error) {
 	return NPMAnalysis{
 		HasInstallScripts: len(installScripts) > 0,
 		Scripts:           installScripts,
+		Dependencies:      len(pkg.Dependencies),
+		DevDependencies:   len(pkg.DevDependencies),
 	}, nil
 }
