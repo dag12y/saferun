@@ -8,6 +8,7 @@ import (
 	"github.com/dag12y/saferun/internal/analyzer"
 	"github.com/dag12y/saferun/internal/prompt"
 	"github.com/dag12y/saferun/internal/registry"
+	"github.com/dag12y/saferun/internal/risk"
 	"github.com/dag12y/saferun/internal/sandbox"
 )
 
@@ -27,6 +28,7 @@ func (n NPM) Install(args []string) error {
 
 	packageName := args[0]
 
+	// Resolve package metadata.
 	fmt.Printf("Resolving package: %s\n", packageName)
 
 	pkg, err := n.Registry.Resolve(packageName)
@@ -38,6 +40,7 @@ func (n NPM) Install(args []string) error {
 	fmt.Printf("Integrity: %s\n", pkg.Integrity)
 	fmt.Printf("Tarball: %s\n", pkg.TarballURL)
 
+	// Download and extract package.
 	fmt.Println()
 	fmt.Println("Downloading package...")
 
@@ -50,8 +53,10 @@ func (n NPM) Install(args []string) error {
 
 	fmt.Printf("Extracted to: %s\n", packagePath)
 
+	// Static analysis.
 	fmt.Println()
-	fmt.Println("Static Analysis")
+	fmt.Println("SafeRun Security Report")
+	fmt.Println("-----------------------")
 
 	analysis, err := analyzer.AnalyzePackageJSON(
 		filepath.Join(packagePath, "package.json"),
@@ -60,15 +65,37 @@ func (n NPM) Install(args []string) error {
 		return err
 	}
 
-	if analysis.HasInstallScripts {
-		fmt.Println("⚠ Lifecycle scripts detected:")
+	// Convert analyzer findings into risk findings.
+	findings := []risk.Finding{}
 
+	if analysis.HasInstallScripts {
 		for name, command := range analysis.Scripts {
-			fmt.Printf("  %s: %s\n", name, command)
+			findings = append(findings, risk.Finding{
+				Name:        name,
+				Description: command,
+				Severity:    risk.Medium,
+			})
 		}
-	} else {
-		fmt.Println("✓ No lifecycle scripts detected")
 	}
+
+	report := risk.Analyze(findings)
+
+	if len(report.Findings) == 0 {
+		fmt.Println("✓ No suspicious lifecycle scripts detected")
+	} else {
+		for _, finding := range report.Findings {
+			fmt.Printf(
+				"⚠ %s [%s]: %s\n",
+				finding.Name,
+				finding.Severity,
+				finding.Description,
+			)
+		}
+	}
+
+	fmt.Printf("\nRisk: %s\n", report.Level)
+
+	// Ask user before installation.
 	fmt.Println()
 
 	if !prompt.Confirm(fmt.Sprintf(
@@ -80,6 +107,7 @@ func (n NPM) Install(args []string) error {
 		return nil
 	}
 
+	// Install inside sandbox.
 	fmt.Println()
 	fmt.Println("Installing package...")
 
