@@ -6,6 +6,7 @@ import (
 
 	"github.com/dag12y/saferun/internal/cli"
 	"github.com/dag12y/saferun/internal/package_manager"
+	"github.com/dag12y/saferun/internal/registry"
 	"github.com/dag12y/saferun/internal/sandbox"
 )
 
@@ -36,6 +37,9 @@ func main() {
 
 		manager := package_manager.NPM{
 			Sandbox: config,
+			Registry: registry.NPMRegistry{
+				BaseURL: "https://registry.npmjs.org",
+			},
 		}
 
 		if err := manager.Install(command.Arguments); err != nil {
