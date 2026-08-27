@@ -90,6 +90,19 @@ func (n NPM) Install(args []string) error {
 		}
 	}
 
+	fileFindings, err := analyzer.AnalyzeFiles(packagePath)
+	if err != nil {
+		return err
+	}
+
+	for _, finding := range fileFindings {
+		findings = append(findings, risk.Finding{
+			Name:        finding.Path,
+			Description: finding.Description,
+			Severity:    risk.Level(finding.Severity),
+		})
+	}
+
 	report := risk.Analyze(findings)
 
 	// Security report.
@@ -121,6 +134,22 @@ func (n NPM) Install(args []string) error {
 					finding.Severity,
 				)
 			}
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("File Analysis")
+
+	if len(fileFindings) == 0 {
+		fmt.Println("  ✓ No suspicious files detected")
+	} else {
+		for _, finding := range fileFindings {
+			fmt.Printf(
+				"  ⚠ %s [%s]: %s\n",
+				finding.Path,
+				finding.Severity,
+				finding.Description,
+			)
 		}
 	}
 
