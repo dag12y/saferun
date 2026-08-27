@@ -28,7 +28,6 @@ func (n NPM) Install(args []string) error {
 
 	packageName := args[0]
 
-	// Resolve package metadata.
 	fmt.Printf("Resolving package: %s\n", packageName)
 
 	pkg, err := n.Registry.Resolve(packageName)
@@ -40,7 +39,6 @@ func (n NPM) Install(args []string) error {
 	fmt.Printf("Integrity: %s\n", pkg.Integrity)
 	fmt.Printf("Tarball: %s\n", pkg.TarballURL)
 
-	// Download and extract package.
 	fmt.Println()
 	fmt.Println("Downloading package...")
 
@@ -53,7 +51,7 @@ func (n NPM) Install(args []string) error {
 
 	fmt.Printf("Extracted to: %s\n", packagePath)
 
-	// Analyze package.json.
+	// Static analysis.
 	analysis, err := analyzer.AnalyzePackageJSON(
 		filepath.Join(packagePath, "package.json"),
 	)
@@ -62,14 +60,32 @@ func (n NPM) Install(args []string) error {
 	}
 
 	// Build risk findings.
-	findings := []risk.Finding{}
+	var findings []risk.Finding
 
-	if analysis.HasInstallScripts {
-		for name, command := range analysis.Scripts {
+	for name, command := range analysis.Scripts {
+		scriptFindings := analyzer.AnalyzeScript(command)
+
+		if len(scriptFindings) == 0 {
 			findings = append(findings, risk.Finding{
 				Name:        name,
 				Description: command,
 				Severity:    risk.Medium,
+			})
+
+			continue
+		}
+
+		for _, scriptFinding := range scriptFindings {
+			severity := risk.Level(scriptFinding.Severity)
+
+			findings = append(findings, risk.Finding{
+				Name: fmt.Sprintf(
+					"%s: %s",
+					name,
+					scriptFinding.Pattern,
+				),
+				Description: scriptFinding.Description,
+				Severity:    severity,
 			})
 		}
 	}
@@ -90,22 +106,27 @@ func (n NPM) Install(args []string) error {
 	fmt.Println()
 	fmt.Println("Lifecycle Scripts")
 
-	if len(report.Findings) == 0 {
-		fmt.Println("  ✓ No suspicious lifecycle scripts detected")
+	if len(analysis.Scripts) == 0 {
+		fmt.Println("  ✓ None detected")
 	} else {
-		for _, finding := range report.Findings {
-			fmt.Printf(
-				"  ⚠ %s [%s]: %s\n",
-				finding.Name,
-				finding.Severity,
-				finding.Description,
-			)
+		for name, command := range analysis.Scripts {
+			fmt.Printf("  ⚠ %s: %s\n", name, command)
+
+			scriptFindings := analyzer.AnalyzeScript(command)
+
+			for _, finding := range scriptFindings {
+				fmt.Printf(
+					"      └─ %s [%s]\n",
+					finding.Description,
+					finding.Severity,
+				)
+			}
 		}
 	}
 
 	fmt.Printf("\nRisk: %s\n", report.Level)
 
-	// Ask user before installation.
+	// User approval.
 	fmt.Println()
 
 	if !prompt.Confirm(fmt.Sprintf(
@@ -117,7 +138,6 @@ func (n NPM) Install(args []string) error {
 		return nil
 	}
 
-	// Install inside sandbox.
 	fmt.Println()
 	fmt.Println("Installing package...")
 
