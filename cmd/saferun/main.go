@@ -22,10 +22,11 @@ func main() {
 	}
 
 	config := sandbox.Config{
-		Image:   "saferun-node:dev",
-		Network: "bridge",
-		Memory:  "512m",
-		CPUs:    "1",
+		Image:     "saferun-node:dev",
+		Network:   "bridge",
+		Memory:    "512m",
+		CPUs:      "1",
+		Workspace: "/tmp/saferun-workspace",
 	}
 
 	switch command.PackageManager {

@@ -5,4 +5,6 @@ type Config struct {
 	Network string
 	Memory  string
 	CPUs    string
+
+	Workspace string
 }
