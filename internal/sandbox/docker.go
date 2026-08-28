@@ -7,27 +7,46 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/dag12y/saferun/internal/analyzer"
 )
 
-func Run(config Config, command ...string) error {
+func Run(config Config, command ...string) (analyzer.FileChanges, error) {
 	parent := config.Workspace
+
 	if parent == "" {
-		return fmt.Errorf("sandbox workspace is required")
+		return analyzer.FileChanges{}, fmt.Errorf("sandbox workspace is required")
 	}
 
 	if err := os.MkdirAll(parent, 0755); err != nil {
-		return fmt.Errorf("create sandbox workspace parent: %w", err)
+		return analyzer.FileChanges{}, fmt.Errorf(
+			"create sandbox workspace parent: %w",
+			err,
+		)
 	}
 
 	workspace, err := os.MkdirTemp(parent, "run-")
 	if err != nil {
-		return fmt.Errorf("create sandbox workspace: %w", err)
+		return analyzer.FileChanges{}, fmt.Errorf(
+			"create sandbox workspace: %w",
+			err,
+		)
 	}
+
 	defer os.RemoveAll(workspace)
 
 	workspace, err = filepath.Abs(workspace)
 	if err != nil {
-		return fmt.Errorf("resolve sandbox workspace: %w", err)
+		return analyzer.FileChanges{}, fmt.Errorf(
+			"resolve sandbox workspace: %w",
+			err,
+		)
+	}
+
+	// Snapshot before installation
+	before, err := analyzer.SnapshotDirectory(workspace)
+	if err != nil {
+		return analyzer.FileChanges{}, err
 	}
 
 	args := []string{
@@ -45,15 +64,14 @@ func Run(config Config, command ...string) error {
 		// Network
 		"--network=" + config.Network,
 
-		// Isolated workspace
+		// Workspace
 		"--volume=" + workspace + ":/saferun/workspace",
 		"--workdir=/saferun/workspace",
 
-		// Match the host user so npm can write to the bind-mounted workspace.
-		// With --cap-drop=ALL, root cannot bypass directory ownership checks.
+		// Match host user permissions
 		"--user=" + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 
-		// Bypass the image entrypoint.
+		// Bypass node entrypoint
 		"--entrypoint=/bin/sh",
 
 		config.Image,
@@ -68,10 +86,22 @@ func Run(config Config, command ...string) error {
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
-		return fmt.Errorf("sandbox failed: %w\n%s", err, output)
+		return analyzer.FileChanges{}, fmt.Errorf(
+			"sandbox failed: %w\n%s",
+			err,
+			output,
+		)
 	}
 
 	fmt.Print(string(output))
 
-	return nil
+	// Snapshot after installation
+	after, err := analyzer.SnapshotDirectory(workspace)
+	if err != nil {
+		return analyzer.FileChanges{}, err
+	}
+
+	changes := analyzer.CompareSnapshots(before, after)
+
+	return changes, nil
 }

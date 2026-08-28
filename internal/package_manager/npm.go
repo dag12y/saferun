@@ -172,5 +172,29 @@ func (n NPM) Install(args []string) error {
 
 	command := append([]string{"npm", "install"}, args...)
 
-	return sandbox.Run(n.Sandbox, command...)
+	changes, err := sandbox.Run(n.Sandbox, command...)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println()
+	fmt.Println("Behavior Analysis")
+	fmt.Println("-----------------")
+
+	behaviorFindings := analyzer.AnalyzeFileChanges(changes)
+
+	if len(behaviorFindings) == 0 {
+		fmt.Println("  ✓ No suspicious file behavior detected")
+	} else {
+		for _, finding := range behaviorFindings {
+			fmt.Printf(
+				"  ⚠ %s [%s]: %s\n",
+				finding.Path,
+				finding.Severity,
+				finding.Description,
+			)
+		}
+	}
+	return nil
+
 }
