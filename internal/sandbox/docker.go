@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dag12y/saferun/internal/analyzer"
 )
@@ -43,15 +44,19 @@ func Run(config Config, command ...string) (analyzer.FileChanges, error) {
 		)
 	}
 
-	// Snapshot before installation
 	before, err := analyzer.SnapshotDirectory(workspace)
 	if err != nil {
 		return analyzer.FileChanges{}, err
 	}
 
+	containerName := "saferun-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+
 	args := []string{
 		"run",
-		"--rm",
+		"-d",
+
+		"--name",
+		containerName,
 
 		// Security
 		"--cap-drop=ALL",
@@ -64,38 +69,64 @@ func Run(config Config, command ...string) (analyzer.FileChanges, error) {
 		// Network
 		"--network=" + config.Network,
 
-		// Workspace
+		// Isolated workspace
 		"--volume=" + workspace + ":/saferun/workspace",
 		"--workdir=/saferun/workspace",
 
 		// Match host user permissions
 		"--user=" + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 
-		// Bypass node entrypoint
+		// Bypass image entrypoint
 		"--entrypoint=/bin/sh",
 
 		config.Image,
+
+		"-c",
+		"tail -f /dev/null",
 	}
 
-	commandString := strings.Join(command, " ")
+	// Start container.
+	startCmd := exec.Command("docker", args...)
 
-	args = append(args, "-c", commandString)
-
-	cmd := exec.Command("docker", args...)
-
-	output, err := cmd.CombinedOutput()
-
+	output, err := startCmd.CombinedOutput()
 	if err != nil {
 		return analyzer.FileChanges{}, fmt.Errorf(
-			"sandbox failed: %w\n%s",
+			"sandbox failed to start: %w\n%s",
 			err,
 			output,
 		)
 	}
 
-	fmt.Print(string(output))
+	// Always remove the container when we're finished.
+	defer func() {
+		_ = exec.Command("docker", "rm", "-f", containerName).Run()
+	}()
 
-	// Snapshot after installation
+	fmt.Println("Sandbox started:", containerName)
+
+	// Run package manager command inside the running sandbox.
+	commandString := strings.Join(command, " ")
+
+	installCmd := exec.Command(
+		"docker",
+		"exec",
+		containerName,
+		"sh",
+		"-c",
+		commandString,
+	)
+
+	installOutput, err := installCmd.CombinedOutput()
+
+	fmt.Print(string(installOutput))
+
+	if err != nil {
+		return analyzer.FileChanges{}, fmt.Errorf(
+			"sandbox install failed: %w",
+			err,
+		)
+	}
+
 	after, err := analyzer.SnapshotDirectory(workspace)
 	if err != nil {
 		return analyzer.FileChanges{}, err
