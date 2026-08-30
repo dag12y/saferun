@@ -21,7 +21,7 @@ func TestRunCreatesIsolatedWorkspaceAndCleansUp(t *testing.T) {
 		Workspace: workspaceRoot,
 	}
 
-	changes, _, err := Run(config, "sh", "-c", "echo ready > /saferun/workspace/test.txt && echo hello > /saferun/workspace/hello.txt")
+	changes, _, _, err := Run(config, "sh", "-c", "echo ready > /saferun/workspace/test.txt && echo hello > /saferun/workspace/hello.txt")
 	if err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
 	}

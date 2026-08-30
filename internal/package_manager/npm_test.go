@@ -46,8 +46,8 @@ func TestNPMInstallCancelledDoesNotRunRealInstall(t *testing.T) {
 			}
 			return dir, nil
 		},
-		SandboxRunner: func(config sandbox.Config, command ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, error) {
-			return analyzer.FileChanges{}, nil, nil
+		SandboxRunner: func(config sandbox.Config, command ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error) {
+			return analyzer.FileChanges{}, nil, nil, nil
 		},
 		RealInstaller: func(args []string) error {
 			installerCalled = true
@@ -80,8 +80,8 @@ func TestNPMInstallApprovedInvokesRealInstall(t *testing.T) {
 			}
 			return dir, nil
 		},
-		SandboxRunner: func(config sandbox.Config, command ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, error) {
-			return analyzer.FileChanges{}, nil, nil
+		SandboxRunner: func(config sandbox.Config, command ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error) {
+			return analyzer.FileChanges{}, nil, nil, nil
 		},
 		RealInstaller: func(args []string) error {
 			installerArgs = append([]string(nil), args...)

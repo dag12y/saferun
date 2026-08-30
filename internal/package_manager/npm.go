@@ -18,7 +18,7 @@ type NPM struct {
 	Registry      registry.NPMRegistry
 	ResolveFunc   func(string) (registry.PackageInfo, error)
 	DownloadFunc  func(registry.PackageInfo) (string, error)
-	SandboxRunner func(sandbox.Config, ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, error)
+	SandboxRunner func(sandbox.Config, ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error)
 	RealInstaller func([]string) error
 	Prompt        func(string) bool
 }
@@ -124,7 +124,7 @@ func (n NPM) Install(args []string) error {
 	if runner == nil {
 		runner = sandbox.Run
 	}
-	changes, processFindings, err := runner(n.Sandbox, sandboxCommand...)
+	changes, processFindings, networkConnections, err := runner(n.Sandbox, sandboxCommand...)
 	if err != nil {
 		return fmt.Errorf("sandbox installation failed: %w", err)
 	}
@@ -143,6 +143,11 @@ func (n NPM) Install(args []string) error {
 			Description: finding.Reason,
 			Severity:    risk.Level(finding.Severity),
 		})
+	}
+
+	networkFindings := analyzer.AnalyzeNetworkConnections(networkConnections)
+	for _, finding := range networkFindings {
+		findings = append(findings, finding)
 	}
 
 	result := risk.Analyze(findings)
@@ -167,6 +172,26 @@ func (n NPM) Install(args []string) error {
 		for _, finding := range processFindings {
 			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Command, finding.Severity, finding.Reason)
 		}
+	}
+
+	fmt.Println()
+	fmt.Println("Network Analysis")
+	fmt.Println("----------------")
+	expectedConnections := analyzer.ExpectedRegistryConnections(networkConnections)
+	if len(expectedConnections) > 0 {
+		for _, destination := range expectedConnections {
+			fmt.Printf("  ✓ %s\n", destination)
+		}
+	}
+	if len(networkFindings) == 0 && len(expectedConnections) == 0 {
+		fmt.Println("  ✓ No unexpected network connections detected")
+	} else {
+		for _, finding := range networkFindings {
+			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Name, finding.Severity, finding.Description)
+		}
+	}
+	if len(expectedConnections) > 0 && len(networkFindings) == 0 {
+		fmt.Println("  ✓ Registry traffic was allowed")
 	}
 
 	fmt.Println()
