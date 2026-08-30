@@ -1,9 +1,11 @@
 package analyzer
 
 import (
-	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -18,50 +20,98 @@ func AnalyzeProcesses(containerID string) ([]ProcessFinding, error) {
 		"docker",
 		"exec",
 		containerID,
-		"ps",
-		"-eo",
-		"comm,args",
+		"sh",
+		"-c",
+		`for proc in /proc/[0-9]*/cmdline; do [ -r "$proc" ] || continue; tr '\0' ' ' < "$proc"; echo; done`,
 	)
 
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("inspect sandbox processes: %w", err)
 	}
 
-	var findings []ProcessFinding
+	return AnalyzeProcessOutput(string(output)), nil
+}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+func AnalyzeProcRoot(root string) ([]ProcessFinding, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("read proc root: %w", err)
+	}
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		if line == "" || strings.HasPrefix(line, "COMMAND") {
+	var lines []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
 			continue
 		}
 
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
+		cmdlinePath := filepath.Join(root, entry.Name(), "cmdline")
+		data, err := os.ReadFile(cmdlinePath)
+		if err != nil {
+			continue
+		}
+		if len(data) == 0 {
 			continue
 		}
 
-		command := fields[0]
-
-		switch command {
-		case "curl", "wget":
-			findings = append(findings, ProcessFinding{
-				Command:  line,
-				Severity: "HIGH",
-				Reason:   "Network download utility executed",
-			})
-
-		case "sh", "bash":
-			findings = append(findings, ProcessFinding{
-				Command:  line,
-				Severity: "MEDIUM",
-				Reason:   "Shell process executed",
-			})
+		line := strings.TrimSpace(strings.ReplaceAll(string(data), "\x00", " "))
+		if line != "" {
+			lines = append(lines, line)
 		}
 	}
 
-	return findings, scanner.Err()
+	return AnalyzeProcessOutput(strings.Join(lines, "\n")), nil
+}
+
+func AnalyzeProcessOutput(output string) []ProcessFinding {
+	var findings []ProcessFinding
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		cmdName := firstCommandName(line)
+		if cmdName == "" {
+			continue
+		}
+
+		lowerLine := strings.ToLower(line)
+		lowerName := strings.ToLower(cmdName)
+
+		switch lowerName {
+		case "curl", "wget", "nc", "netcat":
+			findings = append(findings, ProcessFinding{
+				Command:  cmdName,
+				Severity: "HIGH",
+				Reason:   "Network download utility executed",
+			})
+		case "bash":
+			if strings.Contains(lowerLine, "curl") ||
+				strings.Contains(lowerLine, "wget") ||
+				strings.Contains(lowerLine, "nc ") ||
+				strings.Contains(lowerLine, "netcat") ||
+				strings.Contains(lowerLine, "bash -c") {
+				findings = append(findings, ProcessFinding{
+					Command:  cmdName,
+					Severity: "MEDIUM",
+					Reason:   "Shell process executed suspicious payload",
+				})
+			}
+		}
+	}
+
+	return findings
+}
+
+func firstCommandName(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	return filepath.Base(fields[0])
 }
