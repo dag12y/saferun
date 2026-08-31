@@ -41,110 +41,126 @@ func (n NPM) Name() string {
 	return "npm"
 }
 
+type packageReport struct {
+	Package   registry.PackageInfo
+	Analysis  analyzer.NPMAnalysis
+	Findings  []risk.Finding
+	FileFindings []analyzer.FileFinding
+	Source    string
+}
+
 func (n NPM) Install(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("no npm package specified")
-	}
-
-	packageName := args[0]
-	var (
-		pkg         registry.PackageInfo
-		packagePath string
-		analysis    analyzer.NPMAnalysis
-		err         error
-	)
-
-	if isLocalPackagePath(packageName) {
-		packagePath, err = resolveLocalPackagePath(packageName)
-		if err != nil {
-			return err
-		}
-		defer os.RemoveAll(packagePath)
-
-		pkg, err = loadLocalPackageInfo(packagePath)
-		if err != nil {
-			return fmt.Errorf("failed to read local package metadata: %w", err)
-		}
-		fmt.Printf("Package: %s@%s\n", pkg.Name, pkg.Version)
-		fmt.Printf("Source: %s\n", packagePath)
-		fmt.Println()
-	} else {
-		fmt.Printf("Resolving package: %s\n", packageName)
-
-		resolveFunc := n.ResolveFunc
-		if resolveFunc == nil {
-			resolveFunc = n.Registry.Resolve
-		}
-
-		pkg, err = resolveFunc(packageName)
-		if err != nil {
-			return fmt.Errorf("failed to resolve package: %w", err)
-		}
-
-		fmt.Printf("Package: %s@%s\n", pkg.Name, pkg.Version)
-		fmt.Printf("Integrity: %s\n", pkg.Integrity)
-		fmt.Printf("Tarball: %s\n", pkg.TarballURL)
-
-		fmt.Println()
-		fmt.Println("Downloading package...")
-
-		downloadFunc := n.DownloadFunc
-		if downloadFunc == nil {
-			downloadFunc = n.Registry.Download
-		}
-
-		packagePath, err = downloadFunc(pkg)
-		if err != nil {
-			return fmt.Errorf("failed to download package: %w", err)
-		}
-		defer os.RemoveAll(packagePath)
-
-		fmt.Printf("Extracted to: %s\n", packagePath)
-	}
-
-	analysis, err = analyzer.AnalyzePackageJSON(
-		filepath.Join(packagePath, "package.json"),
-	)
+	parsed, err := ParseInstallArgs(args)
 	if err != nil {
-		return fmt.Errorf("failed to analyze package metadata: %w", err)
+		return err
+	}
+	if len(parsed.Packages) == 0 {
+		return fmt.Errorf("usage: saferun npm install <package> [options]")
 	}
 
-	findings := make([]risk.Finding, 0)
-	for name, command := range analysis.Scripts {
-		scriptFindings := analyzer.AnalyzeScript(command)
-		if len(scriptFindings) == 0 {
-			findings = append(findings, risk.Finding{
-				Name:        name,
-				Description: command,
-				Severity:    risk.Medium,
-			})
-			continue
-		}
-		for _, scriptFinding := range scriptFindings {
-			findings = append(findings, risk.Finding{
-				Name:        fmt.Sprintf("%s: %s", name, scriptFinding.Pattern),
-				Description: scriptFinding.Description,
-				Severity:    risk.Level(scriptFinding.Severity),
-			})
-		}
-	}
+	packageArgs := append([]string(nil), parsed.Packages...)
+	installArgs := append([]string(nil), args...)
+	packageReports := make([]packageReport, 0, len(packageArgs))
+	allFindings := make([]risk.Finding, 0)
 
-	fileFindings, err := analyzer.AnalyzeFiles(packagePath)
-	if err != nil {
-		return fmt.Errorf("failed to analyze package files: %w", err)
-	}
-	for _, finding := range fileFindings {
-		findings = append(findings, risk.Finding{
-			Name:        finding.Path,
-			Description: finding.Description,
-			Severity:    risk.Level(finding.Severity),
-		})
+	for _, packageName := range packageArgs {
+		var report packageReport
+	
+		if isLocalPackagePath(packageName) {
+			localPath, err := resolveLocalPackagePath(packageName)
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(localPath)
+
+			info, err := loadLocalPackageInfo(localPath)
+			if err != nil {
+				return fmt.Errorf("failed to read local package metadata: %w", err)
+			}
+			report.Package = info
+			report.Source = localPath
+			fmt.Printf("Package: %s@%s\n", report.Package.Name, report.Package.Version)
+			fmt.Printf("Source: %s\n", report.Source)
+			fmt.Println()
+		} else {
+			fmt.Printf("Resolving package: %s\n", packageName)
+			resolveFunc := n.ResolveFunc
+			if resolveFunc == nil {
+				resolveFunc = n.Registry.Resolve
+			}
+
+			resolved, err := resolveFunc(packageName)
+			if err != nil {
+				return fmt.Errorf("failed to resolve package %q: %w", packageName, err)
+			}
+			report.Package = resolved
+			fmt.Printf("Package: %s@%s\n", report.Package.Name, report.Package.Version)
+			fmt.Printf("Integrity: %s\n", report.Package.Integrity)
+			fmt.Printf("Tarball: %s\n", report.Package.TarballURL)
+			fmt.Println()
+			fmt.Println("Downloading package...")
+
+			downloadFunc := n.DownloadFunc
+			if downloadFunc == nil {
+				downloadFunc = n.Registry.Download
+			}
+
+			downloaded, err := downloadFunc(resolved)
+			if err != nil {
+				return fmt.Errorf("failed to download package %q: %w", packageName, err)
+			}
+			defer os.RemoveAll(downloaded)
+			report.Source = downloaded
+			fmt.Printf("Extracted to: %s\n", report.Source)
+		}
+
+		analysis, err := analyzer.AnalyzePackageJSON(filepath.Join(report.Source, "package.json"))
+		if err != nil {
+			return fmt.Errorf("failed to analyze package metadata: %w", err)
+		}
+		report.Analysis = analysis
+
+		packageFindings := make([]risk.Finding, 0)
+		for name, command := range analysis.Scripts {
+			scriptFindings := analyzer.AnalyzeScript(command)
+			if len(scriptFindings) == 0 {
+				packageFindings = append(packageFindings, risk.Finding{
+					Name:        name,
+					Description: command,
+					Severity:    risk.Medium,
+				})
+				continue
+			}
+			for _, scriptFinding := range scriptFindings {
+				packageFindings = append(packageFindings, risk.Finding{
+					Name:        fmt.Sprintf("%s: %s", name, scriptFinding.Pattern),
+					Description: scriptFinding.Description,
+					Severity:    risk.Level(scriptFinding.Severity),
+				})
+			}
+		}
+
+		fileFindings, err := analyzer.AnalyzeFiles(report.Source)
+		if err != nil {
+			return fmt.Errorf("failed to analyze package files for %s: %w", report.Package.Name, err)
+		}
+		report.FileFindings = fileFindings
+		for _, finding := range fileFindings {
+			packageFindings = append(packageFindings, risk.Finding{
+				Name:        finding.Path,
+				Description: finding.Description,
+				Severity:    risk.Level(finding.Severity),
+			})
+		}
+		report.Findings = packageFindings
+		allFindings = append(allFindings, packageFindings...)
+		packageReports = append(packageReports, report)
 	}
 
 	fmt.Println()
 	fmt.Println("Starting sandbox...")
 
-	sandboxCommand := append([]string{"npm", "install"}, args...)
+	sandboxCommand := append([]string{"npm", "install"}, installArgs...)
 	runner := n.SandboxRunner
 	if runner == nil {
 		runner = sandbox.Run
@@ -156,26 +172,24 @@ func (n NPM) Install(args []string) error {
 
 	behaviorFindings := analyzer.AnalyzeFileChanges(changes)
 	for _, finding := range behaviorFindings {
-		findings = append(findings, risk.Finding{
+		allFindings = append(allFindings, risk.Finding{
 			Name:        finding.Path,
 			Description: finding.Description,
 			Severity:    risk.Level(finding.Severity),
 		})
 	}
 	for _, finding := range processFindings {
-		findings = append(findings, risk.Finding{
+		allFindings = append(allFindings, risk.Finding{
 			Name:        finding.Command,
 			Description: finding.Reason,
 			Severity:    risk.Level(finding.Severity),
 		})
 	}
-
-	networkFindings := analyzer.AnalyzeNetworkConnections(networkConnections)
-	for _, finding := range networkFindings {
-		findings = append(findings, finding)
+	for _, finding := range analyzer.AnalyzeNetworkConnections(networkConnections) {
+		allFindings = append(allFindings, finding)
 	}
 
-	result := risk.Analyze(findings)
+	result := risk.Analyze(allFindings)
 
 	fmt.Println()
 	fmt.Println("Behavior Analysis")
@@ -208,46 +222,51 @@ func (n NPM) Install(args []string) error {
 			fmt.Printf("  ✓ %s\n", destination)
 		}
 	}
-	if len(networkFindings) == 0 && len(expectedConnections) == 0 {
+	if len(analyzer.AnalyzeNetworkConnections(networkConnections)) == 0 && len(expectedConnections) == 0 {
 		fmt.Println("  ✓ No unexpected network connections detected")
 	} else {
-		for _, finding := range networkFindings {
+		for _, finding := range analyzer.AnalyzeNetworkConnections(networkConnections) {
 			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Name, finding.Severity, finding.Description)
 		}
 	}
-	if len(expectedConnections) > 0 && len(networkFindings) == 0 {
+	if len(expectedConnections) > 0 && len(analyzer.AnalyzeNetworkConnections(networkConnections)) == 0 {
 		fmt.Println("  ✓ Registry traffic was allowed")
 	}
 
 	fmt.Println()
 	fmt.Println("SafeRun Security Report")
 	fmt.Println("-----------------------")
-	fmt.Printf("Package: %s@%s\n\n", pkg.Name, pkg.Version)
-	fmt.Println("Metadata")
-	fmt.Printf("  Dependencies: %d\n", analysis.Dependencies)
-	fmt.Printf("  Dev dependencies: %d\n", analysis.DevDependencies)
-	fmt.Println()
-	fmt.Println("Lifecycle Scripts")
-	if len(analysis.Scripts) == 0 {
-		fmt.Println("  ✓ None detected")
-	} else {
-		for name, command := range analysis.Scripts {
-			fmt.Printf("  ⚠ %s: %s\n", name, command)
-			for _, finding := range analyzer.AnalyzeScript(command) {
-				fmt.Printf("      └─ %s [%s]\n", finding.Description, finding.Severity)
+	if len(packageReports) > 1 {
+		fmt.Printf("Packages: %d\n\n", len(packageReports))
+	}
+	for _, pkgReport := range packageReports {
+		fmt.Printf("Package: %s@%s\n\n", pkgReport.Package.Name, pkgReport.Package.Version)
+		fmt.Println("Metadata")
+		fmt.Printf("  Dependencies: %d\n", pkgReport.Analysis.Dependencies)
+		fmt.Printf("  Dev dependencies: %d\n", pkgReport.Analysis.DevDependencies)
+		fmt.Println()
+		fmt.Println("Lifecycle Scripts")
+		if len(pkgReport.Analysis.Scripts) == 0 {
+			fmt.Println("  ✓ None detected")
+		} else {
+			for name, command := range pkgReport.Analysis.Scripts {
+				fmt.Printf("  ⚠ %s: %s\n", name, command)
+				for _, finding := range analyzer.AnalyzeScript(command) {
+					fmt.Printf("      └─ %s [%s]\n", finding.Description, finding.Severity)
+				}
 			}
 		}
-	}
-	fmt.Println()
-	fmt.Println("File Analysis")
-	if len(fileFindings) == 0 {
-		fmt.Println("  ✓ No suspicious files detected")
-	} else {
-		for _, finding := range fileFindings {
-			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Path, finding.Severity, finding.Description)
+		fmt.Println()
+		fmt.Println("File Analysis")
+		if len(pkgReport.FileFindings) == 0 {
+			fmt.Println("  ✓ No suspicious files detected")
+		} else {
+			for _, finding := range pkgReport.FileFindings {
+				fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Path, finding.Severity, finding.Description)
+			}
 		}
+		fmt.Println()
 	}
-	fmt.Println()
 	fmt.Println("Risk Summary")
 	fmt.Println("------------")
 	fmt.Printf("Score: %d\n", result.Score)
@@ -271,18 +290,29 @@ func (n NPM) Install(args []string) error {
 		confirm = prompt.Confirm
 	}
 	fmt.Println()
-	if !confirm(fmt.Sprintf("Install %s@%s in your project?", pkg.Name, pkg.Version)) {
-		fmt.Println("Installation cancelled.")
-		return nil
+	if len(packageReports) > 1 {
+		if !confirm(fmt.Sprintf("Install %d packages in your project?", len(packageReports))) {
+			fmt.Println("Installation cancelled.")
+			return nil
+		}
+	} else {
+		if !confirm(fmt.Sprintf("Install %s@%s in your project?", packageReports[0].Package.Name, packageReports[0].Package.Version)) {
+			fmt.Println("Installation cancelled.")
+			return nil
+		}
 	}
 
 	fmt.Println()
-	fmt.Printf("Installing %s@%s in your project...\n", pkg.Name, pkg.Version)
+	if len(packageReports) > 1 {
+		fmt.Printf("Installing %d packages in your project...\n", len(packageReports))
+	} else {
+		fmt.Printf("Installing %s@%s in your project...\n", packageReports[0].Package.Name, packageReports[0].Package.Version)
+	}
 	installer := n.RealInstaller
 	if installer == nil {
 		installer = DefaultNPMInstaller
 	}
-	if err := installer(append([]string{"install"}, args...)); err != nil {
+	if err := installer(append([]string{"install"}, installArgs...)); err != nil {
 		return fmt.Errorf("real npm installation failed: %w", err)
 	}
 	return nil

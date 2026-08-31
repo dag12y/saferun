@@ -35,7 +35,7 @@ func main() {
 	switch command.PackageManager {
 	case "npm":
 		if command.Operation != "install" {
-			fmt.Fprintln(os.Stderr, "Error: only npm install is currently supported")
+			fmt.Fprintf(os.Stderr, "Error: unsupported npm operation: %s\n\nUsage:\n  saferun npm install <package> [options]\n", command.Operation)
 			os.Exit(1)
 		}
 
@@ -47,14 +47,14 @@ func main() {
 		}
 
 		if err := manager.Install(command.Arguments); err != nil {
-			fmt.Fprintln(os.Stderr, "Error:", err)
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
 
 	default:
 		fmt.Fprintf(
 			os.Stderr,
-			"Error: unsupported package manager: %s\n",
+			"Error: unsupported package manager: %s\n\nUsage:\n  saferun npm install <package> [options]\n",
 			command.PackageManager,
 		)
 		os.Exit(1)
