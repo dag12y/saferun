@@ -397,26 +397,6 @@ func (n NPM) Install(args []string) error {
 	if installer == nil {
 		installer = DefaultNPMInstaller
 	}
-	if err := installer(append([]string{"install"}, installArgs...)); err != nil {
-		auditEvent := audit.Event{
-			Packages:     append([]string(nil), packageArgs...),
-			Risk:         string(result.Level),
-			Score:        result.Score,
-			FindingCount: result.FindingCount,
-			Decision:     decisionStatus,
-			Approval:     audit.ApprovalAccepted,
-			Installation: audit.InstallationFailed,
-			Verification: audit.VerificationNotRun,
-			Reason:       err.Error(),
-		}
-		loggerRecord(logger, auditEvent)
-		fmt.Println()
-		fmt.Println("Audit")
-		fmt.Println("-----")
-		fmt.Println("✓ Security event recorded")
-		return fmt.Errorf("real npm installation failed: %w", err)
-	}
-
 	projectDir := n.ProjectDir
 	if projectDir == "" {
 		projectDir, err = os.Getwd()
@@ -428,8 +408,9 @@ func (n NPM) Install(args []string) error {
 				FindingCount: result.FindingCount,
 				Decision:     decisionStatus,
 				Approval:     audit.ApprovalAccepted,
-				Installation: audit.InstallationSuccess,
+				Installation: audit.InstallationFailed,
 				Verification: audit.VerificationNotRun,
+				Rollback:     audit.RollbackNotRequired,
 				Reason:       fmt.Sprintf("verification setup failed: %v", err),
 			}
 			loggerRecord(logger, auditEvent)
@@ -440,6 +421,71 @@ func (n NPM) Install(args []string) error {
 			return fmt.Errorf("resolve project directory for verification: %w", err)
 		}
 	}
+
+	backup, backupErr := createProjectBackup(projectDir, packageArgs)
+	if backupErr != nil {
+		auditEvent := audit.Event{
+			Packages:     append([]string(nil), packageArgs...),
+			Risk:         string(result.Level),
+			Score:        result.Score,
+			FindingCount: result.FindingCount,
+			Decision:     decisionStatus,
+			Approval:     audit.ApprovalAccepted,
+			Installation: audit.InstallationFailed,
+			Verification: audit.VerificationNotRun,
+			Rollback:     audit.RollbackNotRequired,
+			Reason:       backupErr.Error(),
+		}
+		loggerRecord(logger, auditEvent)
+		fmt.Println()
+		fmt.Println("Backup failed")
+		fmt.Println("Audit")
+		fmt.Println("-----")
+		fmt.Println("✓ Security event recorded")
+		return fmt.Errorf("create project backup: %w", backupErr)
+	}
+
+	if err := installer(append([]string{"install"}, installArgs...)); err != nil {
+		rollbackErr := backup.Restore()
+		auditEvent := audit.Event{
+			Packages:     append([]string(nil), packageArgs...),
+			Risk:         string(result.Level),
+			Score:        result.Score,
+			FindingCount: result.FindingCount,
+			Decision:     decisionStatus,
+			Approval:     audit.ApprovalAccepted,
+			Installation: audit.InstallationFailed,
+			Verification: audit.VerificationNotRun,
+			Rollback:     audit.RollbackSucceeded,
+			Reason:       err.Error(),
+		}
+		if rollbackErr != nil {
+			auditEvent.Rollback = audit.RollbackFailed
+			auditEvent.Reason = fmt.Sprintf("%s; rollback failed: %v", err.Error(), rollbackErr)
+			loggerRecord(logger, auditEvent)
+			fmt.Println()
+			fmt.Println("Rolling back installation...")
+			fmt.Println("✗ Rollback failed.")
+			fmt.Println()
+			fmt.Println("WARNING: SafeRun could not completely restore the project.")
+			fmt.Println("Manual recovery may be required.")
+			fmt.Println()
+			fmt.Println("Audit")
+			fmt.Println("-----")
+			fmt.Println("✓ Security event recorded")
+			return fmt.Errorf("real npm installation failed: %w; rollback failed: %v", err, rollbackErr)
+		}
+		loggerRecord(logger, auditEvent)
+		fmt.Println()
+		fmt.Println("Rolling back installation...")
+		fmt.Println("✓ Project restored successfully.")
+		fmt.Println()
+		fmt.Println("Audit")
+		fmt.Println("-----")
+		fmt.Println("✓ Security event recorded")
+		return fmt.Errorf("real npm installation failed: %w", err)
+	}
+
 	verifier := InstallationVerifier{ProjectDir: projectDir}
 	verificationResult, verifyErr := verifier.Verify(packageArgs, parsed.Flags)
 	fmt.Println()
@@ -469,6 +515,7 @@ func (n NPM) Install(args []string) error {
 	}
 
 	if verifyErr != nil {
+		rollbackErr := backup.Restore()
 		auditEvent := audit.Event{
 			Packages:     append([]string(nil), packageArgs...),
 			Risk:         string(result.Level),
@@ -476,13 +523,34 @@ func (n NPM) Install(args []string) error {
 			FindingCount: result.FindingCount,
 			Decision:     decisionStatus,
 			Approval:     audit.ApprovalAccepted,
-			Installation: audit.InstallationSuccess,
+			Installation: audit.InstallationFailed,
 			Verification: audit.VerificationFailed,
+			Rollback:     audit.RollbackSucceeded,
 			Reason:       verifyErr.Error(),
+		}
+		if rollbackErr != nil {
+			auditEvent.Rollback = audit.RollbackFailed
+			auditEvent.Reason = fmt.Sprintf("%s; rollback failed: %v", verifyErr.Error(), rollbackErr)
+			loggerRecord(logger, auditEvent)
+			fmt.Println()
+			fmt.Println("Rolling back installation...")
+			fmt.Println("✗ Rollback failed.")
+			fmt.Println()
+			fmt.Println("WARNING: SafeRun could not completely restore the project.")
+			fmt.Println("Manual recovery may be required.")
+			fmt.Println()
+			fmt.Println("Audit")
+			fmt.Println("-----")
+			fmt.Println("✓ Security event recorded")
+			return fmt.Errorf("installation verification failed: %w; rollback failed: %v", verifyErr, rollbackErr)
 		}
 		loggerRecord(logger, auditEvent)
 		fmt.Println()
-		fmt.Println("SafeRun installation verification failed.")
+		fmt.Println("Rolling back installation...")
+		fmt.Println("✓ Project restored successfully.")
+		fmt.Println()
+		fmt.Println("SafeRun installation failed.")
+		fmt.Println("✓ Rollback completed.")
 		fmt.Println()
 		fmt.Println("Audit")
 		fmt.Println("-----")
@@ -499,6 +567,19 @@ func (n NPM) Install(args []string) error {
 		Approval:     audit.ApprovalAccepted,
 		Installation: audit.InstallationSuccess,
 		Verification: audit.VerificationPassed,
+		Rollback:     audit.RollbackNotRequired,
+	}
+	if err := backup.Cleanup(); err != nil {
+		auditEvent.Rollback = audit.RollbackFailed
+		auditEvent.Reason = err.Error()
+		loggerRecord(logger, auditEvent)
+		fmt.Println()
+		fmt.Println("WARNING: SafeRun could not fully clean up backup artifacts.")
+		fmt.Println()
+		fmt.Println("Audit")
+		fmt.Println("-----")
+		fmt.Println("✓ Security event recorded")
+		return fmt.Errorf("cleanup backup: %w", err)
 	}
 	loggerRecord(logger, auditEvent)
 

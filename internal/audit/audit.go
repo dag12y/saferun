@@ -18,6 +18,8 @@ type Installation string
 
 type Verification string
 
+type Rollback string
+
 const (
 	DecisionAllow                Decision = "ALLOW"
 	DecisionConfirmationRequired Decision = "CONFIRMATION_REQUIRED"
@@ -34,6 +36,10 @@ const (
 	VerificationPassed Verification = "PASSED"
 	VerificationFailed Verification = "FAILED"
 	VerificationNotRun Verification = "NOT_RUN"
+
+	RollbackNotRequired Rollback = "NOT_REQUIRED"
+	RollbackSucceeded   Rollback = "SUCCESS"
+	RollbackFailed      Rollback = "FAILED"
 )
 
 type Event struct {
@@ -46,6 +52,7 @@ type Event struct {
 	Approval     Approval     `json:"approval,omitempty"`
 	Installation Installation `json:"installation,omitempty"`
 	Verification Verification `json:"verification,omitempty"`
+	Rollback     Rollback     `json:"rollback,omitempty"`
 	Reason       string       `json:"reason,omitempty"`
 }
 
@@ -180,6 +187,9 @@ func FormatRecent(events []Event) string {
 		)
 		if event.Approval != "" {
 			line = fmt.Sprintf("%s  %s", line, event.Approval)
+		}
+		if event.Rollback != "" {
+			line = fmt.Sprintf("%s  %s", line, event.Rollback)
 		}
 		lines = append(lines, line)
 	}
