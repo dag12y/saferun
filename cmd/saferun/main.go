@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/dag12y/saferun/internal/audit"
 	"github.com/dag12y/saferun/internal/cli"
 	"github.com/dag12y/saferun/internal/package_manager"
 	"github.com/dag12y/saferun/internal/registry"
@@ -33,6 +34,16 @@ func main() {
 	}
 
 	switch command.PackageManager {
+	case "audit":
+		events, err := audit.ReadRecent(20)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: read audit log: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("SafeRun Audit Log")
+		fmt.Println("-----------------")
+		fmt.Println(audit.FormatRecent(events))
+		return
 	case "npm":
 		if command.Operation != "install" {
 			fmt.Fprintf(os.Stderr, "Error: unsupported npm operation: %s\n\nUsage:\n  saferun npm install <package> [options]\n", command.Operation)

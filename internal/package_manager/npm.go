@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/dag12y/saferun/internal/analyzer"
+	"github.com/dag12y/saferun/internal/audit"
 	"github.com/dag12y/saferun/internal/policy"
 	"github.com/dag12y/saferun/internal/prompt"
 	"github.com/dag12y/saferun/internal/registry"
@@ -20,6 +21,8 @@ import (
 type NPM struct {
 	Sandbox       sandbox.Config
 	Registry      registry.NPMRegistry
+	ProjectDir    string
+	AuditLogger   audit.Logger
 	ResolveFunc   func(string) (registry.PackageInfo, error)
 	DownloadFunc  func(registry.PackageInfo) (string, error)
 	SandboxRunner func(sandbox.Config, ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error)
@@ -191,6 +194,7 @@ func (n NPM) Install(args []string) error {
 	}
 
 	result := risk.Analyze(allFindings)
+	logger := n.auditLogger()
 
 	fmt.Println()
 	fmt.Println("Behavior Analysis")
@@ -286,18 +290,51 @@ func (n NPM) Install(args []string) error {
 	}
 	fmt.Printf("\nRisk: %s\n", result.Level)
 
-	decision, reason, err := policy.Evaluate(result)
+	decision, reason, policyErr := policy.Evaluate(result)
+	decisionStatus := toAuditDecision(decision)
 	fmt.Println()
 	fmt.Println("Security Policy")
 	fmt.Println("---------------")
-	fmt.Printf("Decision: %s\n", decision)
+	fmt.Printf("Decision: %s\n", decisionStatus)
 	if reason != "" {
 		fmt.Printf("Reason: %s\n", reason)
 	}
-	if err != nil {
-		return fmt.Errorf("security policy evaluation failed: %w", err)
+
+	if policyErr != nil {
+		loggerRecord(logger, audit.Event{
+			Packages:     append([]string(nil), packageArgs...),
+			Risk:         string(result.Level),
+			Score:        result.Score,
+			FindingCount: result.FindingCount,
+			Decision:     audit.DecisionBlock,
+			Approval:     audit.ApprovalNotNeeded,
+			Installation: audit.InstallationNotRun,
+			Verification: audit.VerificationNotRun,
+			Reason:       policyErr.Error(),
+		})
+		fmt.Println()
+		fmt.Println("Audit")
+		fmt.Println("-----")
+		fmt.Println("✓ Security event recorded")
+		return fmt.Errorf("security policy evaluation failed: %w", policyErr)
 	}
 	if decision == policy.Block {
+		auditEvent := audit.Event{
+			Packages:     append([]string(nil), packageArgs...),
+			Risk:         string(result.Level),
+			Score:        result.Score,
+			FindingCount: result.FindingCount,
+			Decision:     audit.DecisionBlock,
+			Approval:     audit.ApprovalNotNeeded,
+			Installation: audit.InstallationNotRun,
+			Verification: audit.VerificationNotRun,
+			Reason:       reason,
+		}
+		loggerRecord(logger, auditEvent)
+		fmt.Println()
+		fmt.Println("Audit")
+		fmt.Println("-----")
+		fmt.Println("✓ Security event recorded")
 		return fmt.Errorf("security policy blocks installation: %s", reason)
 	}
 
@@ -309,11 +346,43 @@ func (n NPM) Install(args []string) error {
 	if len(packageReports) > 1 {
 		if !confirm(fmt.Sprintf("Install %d packages in your project?", len(packageReports))) {
 			fmt.Println("Installation cancelled.")
+			auditEvent := audit.Event{
+				Packages:     append([]string(nil), packageArgs...),
+				Risk:         string(result.Level),
+				Score:        result.Score,
+				FindingCount: result.FindingCount,
+				Decision:     decisionStatus,
+				Approval:     audit.ApprovalDeclined,
+				Installation: audit.InstallationNotRun,
+				Verification: audit.VerificationNotRun,
+				Reason:       "User declined installation.",
+			}
+			loggerRecord(logger, auditEvent)
+			fmt.Println()
+			fmt.Println("Audit")
+			fmt.Println("-----")
+			fmt.Println("✓ Security event recorded")
 			return nil
 		}
 	} else {
 		if !confirm(fmt.Sprintf("Install %s@%s in your project?", packageReports[0].Package.Name, packageReports[0].Package.Version)) {
 			fmt.Println("Installation cancelled.")
+			auditEvent := audit.Event{
+				Packages:     append([]string(nil), packageArgs...),
+				Risk:         string(result.Level),
+				Score:        result.Score,
+				FindingCount: result.FindingCount,
+				Decision:     decisionStatus,
+				Approval:     audit.ApprovalDeclined,
+				Installation: audit.InstallationNotRun,
+				Verification: audit.VerificationNotRun,
+				Reason:       "User declined installation.",
+			}
+			loggerRecord(logger, auditEvent)
+			fmt.Println()
+			fmt.Println("Audit")
+			fmt.Println("-----")
+			fmt.Println("✓ Security event recorded")
 			return nil
 		}
 	}
@@ -329,12 +398,47 @@ func (n NPM) Install(args []string) error {
 		installer = DefaultNPMInstaller
 	}
 	if err := installer(append([]string{"install"}, installArgs...)); err != nil {
+		auditEvent := audit.Event{
+			Packages:     append([]string(nil), packageArgs...),
+			Risk:         string(result.Level),
+			Score:        result.Score,
+			FindingCount: result.FindingCount,
+			Decision:     decisionStatus,
+			Approval:     audit.ApprovalAccepted,
+			Installation: audit.InstallationFailed,
+			Verification: audit.VerificationNotRun,
+			Reason:       err.Error(),
+		}
+		loggerRecord(logger, auditEvent)
+		fmt.Println()
+		fmt.Println("Audit")
+		fmt.Println("-----")
+		fmt.Println("✓ Security event recorded")
 		return fmt.Errorf("real npm installation failed: %w", err)
 	}
 
-	projectDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("resolve project directory for verification: %w", err)
+	projectDir := n.ProjectDir
+	if projectDir == "" {
+		projectDir, err = os.Getwd()
+		if err != nil {
+			auditEvent := audit.Event{
+				Packages:     append([]string(nil), packageArgs...),
+				Risk:         string(result.Level),
+				Score:        result.Score,
+				FindingCount: result.FindingCount,
+				Decision:     decisionStatus,
+				Approval:     audit.ApprovalAccepted,
+				Installation: audit.InstallationSuccess,
+				Verification: audit.VerificationNotRun,
+				Reason:       fmt.Sprintf("verification setup failed: %v", err),
+			}
+			loggerRecord(logger, auditEvent)
+			fmt.Println()
+			fmt.Println("Audit")
+			fmt.Println("-----")
+			fmt.Println("✓ Security event recorded")
+			return fmt.Errorf("resolve project directory for verification: %w", err)
+		}
 	}
 	verifier := InstallationVerifier{ProjectDir: projectDir}
 	verificationResult, verifyErr := verifier.Verify(packageArgs, parsed.Flags)
@@ -365,14 +469,70 @@ func (n NPM) Install(args []string) error {
 	}
 
 	if verifyErr != nil {
+		auditEvent := audit.Event{
+			Packages:     append([]string(nil), packageArgs...),
+			Risk:         string(result.Level),
+			Score:        result.Score,
+			FindingCount: result.FindingCount,
+			Decision:     decisionStatus,
+			Approval:     audit.ApprovalAccepted,
+			Installation: audit.InstallationSuccess,
+			Verification: audit.VerificationFailed,
+			Reason:       verifyErr.Error(),
+		}
+		loggerRecord(logger, auditEvent)
 		fmt.Println()
 		fmt.Println("SafeRun installation verification failed.")
+		fmt.Println()
+		fmt.Println("Audit")
+		fmt.Println("-----")
+		fmt.Println("✓ Security event recorded")
 		return verifyErr
 	}
 
+	auditEvent := audit.Event{
+		Packages:     append([]string(nil), packageArgs...),
+		Risk:         string(result.Level),
+		Score:        result.Score,
+		FindingCount: result.FindingCount,
+		Decision:     decisionStatus,
+		Approval:     audit.ApprovalAccepted,
+		Installation: audit.InstallationSuccess,
+		Verification: audit.VerificationPassed,
+	}
+	loggerRecord(logger, auditEvent)
+
 	fmt.Println()
 	fmt.Println("SafeRun completed successfully.")
+	fmt.Println()
+	fmt.Println("Audit")
+	fmt.Println("-----")
+	fmt.Println("✓ Security event recorded")
 	return nil
+}
+
+func toAuditDecision(decision policy.Decision) audit.Decision {
+	switch decision {
+	case policy.Allow:
+		return audit.DecisionAllow
+	case policy.RequireConfirmation:
+		return audit.DecisionConfirmationRequired
+	default:
+		return audit.DecisionBlock
+	}
+}
+
+func (n NPM) auditLogger() audit.Logger {
+	if n.AuditLogger.Path != "" {
+		return n.AuditLogger
+	}
+	return audit.NewLogger()
+}
+
+func loggerRecord(logger audit.Logger, event audit.Event) {
+	if err := logger.Record(event); err != nil {
+		fmt.Printf("Warning: audit log unavailable: %v\n", err)
+	}
 }
 
 func isLocalPackagePath(spec string) bool {

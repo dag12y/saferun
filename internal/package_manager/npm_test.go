@@ -68,9 +68,15 @@ func TestNPMInstallCancelledDoesNotRunRealInstall(t *testing.T) {
 }
 
 func TestNPMInstallApprovedInvokesRealInstall(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "package.json"), []byte(`{"name":"demo","version":"1.0.0","dependencies":{"lodash":"4.17.0"}}`), 0o600); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
 	installerArgs := []string(nil)
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		ProjectDir: projectDir,
+		Sandbox:    sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			return registry.PackageInfo{Name: name, Version: "4.17.0", TarballURL: "https://example.invalid/package.tgz", Integrity: "sha512-test"}, nil
 		},
@@ -86,7 +92,11 @@ func TestNPMInstallApprovedInvokesRealInstall(t *testing.T) {
 		},
 		RealInstaller: func(args []string) error {
 			installerArgs = append([]string(nil), args...)
-			return nil
+			pkgDir := filepath.Join(projectDir, "node_modules", "lodash")
+			if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"name":"lodash","version":"4.17.0"}`), 0o600)
 		},
 		Prompt: func(msg string) bool {
 			return true

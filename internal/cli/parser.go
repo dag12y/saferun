@@ -9,6 +9,14 @@ type Command struct {
 }
 
 func Parse(args []string) (Command, error) {
+	if len(args) == 0 {
+		return Command{}, fmt.Errorf("usage: saferun <package-manager> <operation> [package] [options]\n\nExample: saferun npm install express --save")
+	}
+
+	if len(args) == 1 && args[0] == "audit" {
+		return Command{PackageManager: "audit", Operation: "audit"}, nil
+	}
+
 	if len(args) < 2 {
 		return Command{}, fmt.Errorf("usage: saferun <package-manager> <operation> [package] [options]\n\nExample: saferun npm install express --save")
 	}
