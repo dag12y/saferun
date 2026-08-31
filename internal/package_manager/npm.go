@@ -42,11 +42,11 @@ func (n NPM) Name() string {
 }
 
 type packageReport struct {
-	Package   registry.PackageInfo
-	Analysis  analyzer.NPMAnalysis
-	Findings  []risk.Finding
+	Package      registry.PackageInfo
+	Analysis     analyzer.NPMAnalysis
+	Findings     []risk.Finding
 	FileFindings []analyzer.FileFinding
-	Source    string
+	Source       string
 }
 
 func (n NPM) Install(args []string) error {
@@ -65,7 +65,7 @@ func (n NPM) Install(args []string) error {
 
 	for _, packageName := range packageArgs {
 		var report packageReport
-	
+
 		if isLocalPackagePath(packageName) {
 			localPath, err := resolveLocalPackagePath(packageName)
 			if err != nil {
@@ -315,6 +315,47 @@ func (n NPM) Install(args []string) error {
 	if err := installer(append([]string{"install"}, installArgs...)); err != nil {
 		return fmt.Errorf("real npm installation failed: %w", err)
 	}
+
+	projectDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve project directory for verification: %w", err)
+	}
+	verifier := InstallationVerifier{ProjectDir: projectDir}
+	verificationResult, verifyErr := verifier.Verify(packageArgs, parsed.Flags)
+	fmt.Println()
+	fmt.Println("Installation Verification")
+	fmt.Println("-------------------------")
+	for _, pkg := range verificationResult.Packages {
+		if !pkg.Installed {
+			fmt.Printf("✗ %s not installed\n", pkg.Name)
+			continue
+		}
+		fmt.Printf("✓ %s@%s installed\n", pkg.Name, pkg.InstalledVersion)
+		if pkg.RecordMatch {
+			fmt.Printf("✓ Recorded in %s\n", pkg.RecordedIn)
+		}
+	}
+	fmt.Println()
+	fmt.Println("Lockfile")
+	fmt.Println("--------")
+	if _, err := os.Stat(filepath.Join(projectDir, "package-lock.json")); err == nil {
+		if verificationResult.LockfileVerified {
+			fmt.Println("✓ package-lock.json verified")
+		} else {
+			fmt.Println("✗ package-lock.json is invalid JSON")
+		}
+	} else {
+		fmt.Println("✓ no package-lock.json present")
+	}
+
+	if verifyErr != nil {
+		fmt.Println()
+		fmt.Println("SafeRun installation verification failed.")
+		return verifyErr
+	}
+
+	fmt.Println()
+	fmt.Println("SafeRun completed successfully.")
 	return nil
 }
 
