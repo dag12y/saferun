@@ -92,8 +92,8 @@ func TestInstallationVerifierMultiplePackagesAndScopedPackages(t *testing.T) {
 	writeJSON(t, filepath.Join(projectDir, "package.json"), map[string]any{
 		"name": "demo",
 		"dependencies": map[string]string{
-			"lodash":    "4.18.1",
-			"dotenv":    "17.4.2",
+			"lodash":      "4.18.1",
+			"dotenv":      "17.4.2",
 			"@types/node": "24.0.0",
 		},
 	})

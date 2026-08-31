@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/dag12y/saferun/internal/analyzer"
+	"github.com/dag12y/saferun/internal/policy"
 	"github.com/dag12y/saferun/internal/prompt"
 	"github.com/dag12y/saferun/internal/registry"
 	"github.com/dag12y/saferun/internal/risk"
@@ -284,6 +285,21 @@ func (n NPM) Install(args []string) error {
 		}
 	}
 	fmt.Printf("\nRisk: %s\n", result.Level)
+
+	decision, reason, err := policy.Evaluate(result)
+	fmt.Println()
+	fmt.Println("Security Policy")
+	fmt.Println("---------------")
+	fmt.Printf("Decision: %s\n", decision)
+	if reason != "" {
+		fmt.Printf("Reason: %s\n", reason)
+	}
+	if err != nil {
+		return fmt.Errorf("security policy evaluation failed: %w", err)
+	}
+	if decision == policy.Block {
+		return fmt.Errorf("security policy blocks installation: %s", reason)
+	}
 
 	confirm := n.Prompt
 	if confirm == nil {
