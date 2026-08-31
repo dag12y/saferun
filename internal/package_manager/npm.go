@@ -247,6 +247,23 @@ func (n NPM) Install(args []string) error {
 			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Path, finding.Severity, finding.Description)
 		}
 	}
+	fmt.Println()
+	fmt.Println("Risk Summary")
+	fmt.Println("------------")
+	fmt.Printf("Score: %d\n", result.Score)
+	fmt.Printf("Findings: %d\n\n", result.FindingCount)
+	fmt.Println("Reasons:")
+	if len(result.Findings) == 0 {
+		fmt.Println("  ✓ No suspicious findings detected")
+	} else {
+		for _, finding := range result.Findings {
+			if finding.Name == "" {
+				fmt.Printf("  ⚠ %-8s %s\n", finding.Severity, finding.Description)
+				continue
+			}
+			fmt.Printf("  ⚠ %-8s %s: %s\n", finding.Severity, finding.Name, finding.Description)
+		}
+	}
 	fmt.Printf("\nRisk: %s\n", result.Level)
 
 	confirm := n.Prompt

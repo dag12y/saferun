@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -14,8 +15,14 @@ import (
 )
 
 func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error) {
-	parent := config.Workspace
+	if config.Timeout <= 0 {
+		config.Timeout = 5 * time.Minute
+	}
+	if config.PidsLimit <= 0 {
+		config.PidsLimit = 128
+	}
 
+	parent := config.Workspace
 	if parent == "" {
 		return analyzer.FileChanges{}, nil, nil, fmt.Errorf("sandbox workspace is required")
 	}
@@ -34,7 +41,6 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 			err,
 		)
 	}
-
 	defer os.RemoveAll(workspace)
 
 	workspace, err = filepath.Abs(workspace)
@@ -44,6 +50,7 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 			err,
 		)
 	}
+	config.Workspace = workspace
 
 	command, err = prepareLocalPackageInSandbox(workspace, command)
 	if err != nil {
@@ -56,29 +63,17 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 	}
 
 	containerName := "saferun-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
 
-	args := []string{
-		"run",
-		"-d",
-		"--name",
-		containerName,
-		"--cap-drop=ALL",
-		"--security-opt=no-new-privileges",
-		"--memory=" + config.Memory,
-		"--cpus=" + config.CPUs,
-		"--network=" + config.Network,
-		"--volume=" + workspace + ":/saferun/workspace",
-		"--workdir=/saferun/workspace",
-		"--user=" + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
-		"--entrypoint=/bin/sh",
-		config.Image,
-		"-c",
-		"tail -f /dev/null",
-	}
-
-	startCmd := exec.Command("docker", args...)
+	args := buildDockerArgs(config, "tail -f /dev/null")
+	args = append([]string{"run", "-d", "--name", containerName, "--rm"}, args...)
+	startCmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := startCmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return analyzer.FileChanges{}, nil, nil, fmt.Errorf("sandbox timed out after %s", config.Timeout)
+		}
 		return analyzer.FileChanges{}, nil, nil, fmt.Errorf(
 			"sandbox failed to start: %w\n%s",
 			err,
@@ -105,17 +100,15 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 	}
 
 	commandString := strings.Join(command, " ")
-	installCmd := exec.Command(
-		"docker",
-		"exec",
-		containerName,
-		"sh",
-		"-c",
-		commandString,
-	)
+	installCtx, installCancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer installCancel()
+	installCmd := exec.CommandContext(installCtx, "docker", "exec", containerName, "sh", "-c", commandString)
 	installOutput, err := installCmd.CombinedOutput()
 	fmt.Print(string(installOutput))
 	if err != nil {
+		if installCtx.Err() == context.DeadlineExceeded {
+			return analyzer.FileChanges{}, nil, nil, fmt.Errorf("sandbox timed out after %s", config.Timeout)
+		}
 		stopMonitor := exec.Command("docker", "exec", containerName, "sh", "-c", "kill $(cat /tmp/saferun-network.pid) 2>/dev/null || true")
 		_ = stopMonitor.Run()
 		return analyzer.FileChanges{}, nil, nil, fmt.Errorf("sandbox installation failed: %w", err)
@@ -143,6 +136,37 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 
 	changes := analyzer.CompareSnapshots(before, after)
 	return changes, processFindings, networkConnections, nil
+}
+
+func buildDockerArgs(config Config, command ...string) []string {
+	workspace := config.Workspace
+	if workspace == "" {
+		workspace = "/saferun/workspace"
+	}
+	user := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+	if config.PidsLimit <= 0 {
+		config.PidsLimit = 128
+	}
+	return []string{
+		"--cap-drop=ALL",
+		"--security-opt=no-new-privileges",
+		"--memory=" + config.Memory,
+		"--cpus=" + config.CPUs,
+		"--pids-limit=" + strconv.Itoa(config.PidsLimit),
+		"--network=" + config.Network,
+		"--read-only",
+		"--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
+		"--env=HOME=/tmp",
+		"--env=NPM_CONFIG_CACHE=/tmp/.npm",
+		"--env=TMPDIR=/tmp",
+		"--volume=" + workspace + ":/saferun/workspace",
+		"--workdir=/saferun/workspace",
+		"--user=" + user,
+		"--entrypoint=/bin/sh",
+		config.Image,
+		"-c",
+		strings.Join(command, " "),
+	}
 }
 
 func prepareLocalPackageInSandbox(workspace string, command []string) ([]string, error) {

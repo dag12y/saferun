@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/dag12y/saferun/internal/cli"
 	"github.com/dag12y/saferun/internal/package_manager"
@@ -27,6 +28,8 @@ func main() {
 		Memory:    "512m",
 		CPUs:      "1",
 		Workspace: "/tmp/saferun-workspace",
+		PidsLimit: 128,
+		Timeout:   5 * time.Minute,
 	}
 
 	switch command.PackageManager {
