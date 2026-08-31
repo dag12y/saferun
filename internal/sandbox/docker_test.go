@@ -11,6 +11,9 @@ func TestRunCreatesIsolatedWorkspaceAndCleansUp(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
+	if out, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
+		t.Skipf("docker runtime unavailable: %v: %s", err, out)
+	}
 
 	workspaceRoot := t.TempDir()
 	config := Config{

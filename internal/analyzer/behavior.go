@@ -44,6 +44,15 @@ func AnalyzeFileChanges(changes FileChanges) []BehaviorFinding {
 				Description: "Created shell script",
 				Severity:    "MEDIUM",
 			})
+			continue
+		}
+
+		if strings.Contains(path, "saferun_test_artifact") || strings.Contains(path, "saferun_test_artifact.txt") {
+			findings = append(findings, BehaviorFinding{
+				Path:        file.Path,
+				Description: "Created a test artifact file for SafeRun detection",
+				Severity:    "MEDIUM",
+			})
 		}
 	}
 

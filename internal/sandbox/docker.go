@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +43,11 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 			"resolve sandbox workspace: %w",
 			err,
 		)
+	}
+
+	command, err = prepareLocalPackageInSandbox(workspace, command)
+	if err != nil {
+		return analyzer.FileChanges{}, nil, nil, err
 	}
 
 	before, err := analyzer.SnapshotDirectory(workspace)
@@ -137,4 +143,100 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 
 	changes := analyzer.CompareSnapshots(before, after)
 	return changes, processFindings, networkConnections, nil
+}
+
+func prepareLocalPackageInSandbox(workspace string, command []string) ([]string, error) {
+	updated := append([]string(nil), command...)
+	for i := 0; i < len(updated)-1; i++ {
+		if updated[i] != "install" {
+			continue
+		}
+		packageSpec := updated[i+1]
+		if packageSpec == "" || !looksLikeLocalPath(packageSpec) {
+			continue
+		}
+
+		absPath, err := filepath.Abs(packageSpec)
+		if err != nil {
+			return nil, fmt.Errorf("resolve local package path %q: %w", packageSpec, err)
+		}
+
+		packageName := filepath.Base(absPath)
+		destination := filepath.Join(workspace, packageName)
+		if err := copyLocalPackage(absPath, destination); err != nil {
+			return nil, fmt.Errorf("copy local package %q to sandbox workspace: %w", packageSpec, err)
+		}
+
+		updated[i+1] = filepath.ToSlash(filepath.Join("/saferun/workspace", packageName))
+	}
+	return updated, nil
+}
+
+func looksLikeLocalPath(spec string) bool {
+	if spec == "" {
+		return false
+	}
+	return filepath.IsAbs(spec) || strings.HasPrefix(spec, ".") || strings.HasPrefix(spec, "~") || strings.HasPrefix(spec, "..")
+}
+
+func copyLocalPackage(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyDirectory(src, dst)
+	}
+	return copyFile(src, dst)
+}
+
+func copyDirectory(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, relPath)
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, 0755)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			return err
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		if _, err := io.Copy(out, in); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func copyFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }

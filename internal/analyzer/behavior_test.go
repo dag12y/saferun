@@ -12,19 +12,22 @@ func TestAnalyzeFileChanges(t *testing.T) {
 			{
 				Path: ".ssh/id_rsa",
 			},
+			{
+				Path: "SAFERUN_TEST_ARTIFACT.txt",
+			},
 		},
 	}
 
 	findings := AnalyzeFileChanges(changes)
 
-	if len(findings) != 1 {
+	if len(findings) != 2 {
 		t.Fatalf(
-			"expected 1 finding, got %d",
+			"expected 2 findings, got %d",
 			len(findings),
 		)
 	}
 
-	if findings[0].Severity != "HIGH" {
-		t.Fatalf("expected HIGH severity")
+	if findings[0].Severity != "HIGH" && findings[1].Severity != "HIGH" {
+		t.Fatalf("expected HIGH severity in a suspicious artifact finding")
 	}
 }

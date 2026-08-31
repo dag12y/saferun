@@ -1,10 +1,13 @@
 package package_manager
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/dag12y/saferun/internal/analyzer"
 	"github.com/dag12y/saferun/internal/prompt"
@@ -44,40 +47,62 @@ func (n NPM) Install(args []string) error {
 	}
 
 	packageName := args[0]
+	var (
+		pkg         registry.PackageInfo
+		packagePath string
+		analysis    analyzer.NPMAnalysis
+		err         error
+	)
 
-	fmt.Printf("Resolving package: %s\n", packageName)
+	if isLocalPackagePath(packageName) {
+		packagePath, err = resolveLocalPackagePath(packageName)
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(packagePath)
 
-	resolveFunc := n.ResolveFunc
-	if resolveFunc == nil {
-		resolveFunc = n.Registry.Resolve
+		pkg, err = loadLocalPackageInfo(packagePath)
+		if err != nil {
+			return fmt.Errorf("failed to read local package metadata: %w", err)
+		}
+		fmt.Printf("Package: %s@%s\n", pkg.Name, pkg.Version)
+		fmt.Printf("Source: %s\n", packagePath)
+		fmt.Println()
+	} else {
+		fmt.Printf("Resolving package: %s\n", packageName)
+
+		resolveFunc := n.ResolveFunc
+		if resolveFunc == nil {
+			resolveFunc = n.Registry.Resolve
+		}
+
+		pkg, err = resolveFunc(packageName)
+		if err != nil {
+			return fmt.Errorf("failed to resolve package: %w", err)
+		}
+
+		fmt.Printf("Package: %s@%s\n", pkg.Name, pkg.Version)
+		fmt.Printf("Integrity: %s\n", pkg.Integrity)
+		fmt.Printf("Tarball: %s\n", pkg.TarballURL)
+
+		fmt.Println()
+		fmt.Println("Downloading package...")
+
+		downloadFunc := n.DownloadFunc
+		if downloadFunc == nil {
+			downloadFunc = n.Registry.Download
+		}
+
+		packagePath, err = downloadFunc(pkg)
+		if err != nil {
+			return fmt.Errorf("failed to download package: %w", err)
+		}
+		defer os.RemoveAll(packagePath)
+
+		fmt.Printf("Extracted to: %s\n", packagePath)
 	}
 
-	pkg, err := resolveFunc(packageName)
-	if err != nil {
-		return fmt.Errorf("failed to resolve package: %w", err)
-	}
-
-	fmt.Printf("Package: %s@%s\n", pkg.Name, pkg.Version)
-	fmt.Printf("Integrity: %s\n", pkg.Integrity)
-	fmt.Printf("Tarball: %s\n", pkg.TarballURL)
-
-	fmt.Println()
-	fmt.Println("Downloading package...")
-
-	downloadFunc := n.DownloadFunc
-	if downloadFunc == nil {
-		downloadFunc = n.Registry.Download
-	}
-
-	packagePath, err := downloadFunc(pkg)
-	if err != nil {
-		return fmt.Errorf("failed to download package: %w", err)
-	}
-	defer os.RemoveAll(packagePath)
-
-	fmt.Printf("Extracted to: %s\n", packagePath)
-
-	analysis, err := analyzer.AnalyzePackageJSON(
+	analysis, err = analyzer.AnalyzePackageJSON(
 		filepath.Join(packagePath, "package.json"),
 	)
 	if err != nil {
@@ -244,4 +269,105 @@ func (n NPM) Install(args []string) error {
 		return fmt.Errorf("real npm installation failed: %w", err)
 	}
 	return nil
+}
+
+func isLocalPackagePath(spec string) bool {
+	if spec == "" {
+		return false
+	}
+	if filepath.IsAbs(spec) || strings.HasPrefix(spec, ".") || strings.HasPrefix(spec, "~") || strings.HasPrefix(spec, "..") {
+		return true
+	}
+	info, err := os.Stat(spec)
+	if err == nil && info.IsDir() {
+		return true
+	}
+	return false
+}
+
+func resolveLocalPackagePath(spec string) (string, error) {
+	path, err := filepath.Abs(spec)
+	if err != nil {
+		return "", fmt.Errorf("resolve local package path %q: %w", spec, err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("local package path %q does not exist: %w", spec, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("local package path %q is not a directory", spec)
+	}
+
+	packageJSONPath := filepath.Join(path, "package.json")
+	if _, err := os.Stat(packageJSONPath); err != nil {
+		return "", fmt.Errorf("local package %q is missing package.json: %w", spec, err)
+	}
+
+	tempDir, err := os.MkdirTemp("", "saferun-local-package-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary package copy: %w", err)
+	}
+
+	if err := copyDirectoryContents(path, tempDir); err != nil {
+		os.RemoveAll(tempDir)
+		return "", fmt.Errorf("copy local package %q to temporary directory: %w", spec, err)
+	}
+
+	return tempDir, nil
+}
+
+func loadLocalPackageInfo(packagePath string) (registry.PackageInfo, error) {
+	path := filepath.Join(packagePath, "package.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return registry.PackageInfo{}, fmt.Errorf("read package.json: %w", err)
+	}
+
+	var pkg struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return registry.PackageInfo{}, fmt.Errorf("decode package metadata: %w", err)
+	}
+	if pkg.Name == "" || pkg.Version == "" {
+		return registry.PackageInfo{}, fmt.Errorf("package.json missing name/version")
+	}
+
+	return registry.PackageInfo{
+		Name:    pkg.Name,
+		Version: pkg.Version,
+	}, nil
+}
+
+func copyDirectoryContents(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, relPath)
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		_, err = io.Copy(out, in)
+		return err
+	})
 }

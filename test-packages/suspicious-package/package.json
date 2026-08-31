@@ -1,0 +1,8 @@
+{
+  "name": "saferun-suspicious-test",
+  "version": "1.0.0",
+  "description": "Harmless package used to test SafeRun detection",
+  "scripts": {
+    "postinstall": "node malicious.js"
+  }
+}
