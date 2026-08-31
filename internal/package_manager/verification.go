@@ -49,9 +49,12 @@ func (v InstallationVerifier) Verify(requestedPackages []string, flags []string)
 	manifestPath := filepath.Join(projectDir, "package.json")
 	manifest, err := loadProjectManifest(manifestPath)
 	if err != nil {
-		result.Errors = append(result.Errors, err.Error())
-		result.Success = false
-		return result, fmt.Errorf("installation verification failed: %s", err)
+		if !os.IsNotExist(err) {
+			result.Errors = append(result.Errors, err.Error())
+			result.Success = false
+			return result, fmt.Errorf("installation verification failed: %s", err)
+		}
+		manifest = projectManifest{}
 	}
 
 	if lockfileVerified, lockErr := verifyLockfile(projectDir); lockErr != nil {
@@ -67,7 +70,7 @@ func (v InstallationVerifier) Verify(requestedPackages []string, flags []string)
 			continue
 		}
 
-		pkgName, expectedVersion, err := resolveRequestedPackage(spec)
+		pkgName, expectedVersion, err := resolveRequestedPackage(spec, projectDir)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", spec, err))
 			continue
@@ -117,14 +120,18 @@ func (v InstallationVerifier) Verify(requestedPackages []string, flags []string)
 	return result, nil
 }
 
-func resolveRequestedPackage(spec string) (string, string, error) {
+func resolveRequestedPackage(spec string, projectDir string) (string, string, error) {
 	trimmed := strings.TrimSpace(spec)
 	if trimmed == "" {
 		return "", "", fmt.Errorf("empty package specifier")
 	}
 
 	if isLocalPackagePath(trimmed) {
-		localPath, err := filepath.Abs(trimmed)
+		pathToResolve := trimmed
+		if !filepath.IsAbs(pathToResolve) {
+			pathToResolve = filepath.Join(projectDir, pathToResolve)
+		}
+		localPath, err := filepath.Abs(pathToResolve)
 		if err != nil {
 			return "", "", fmt.Errorf("resolve local package: %w", err)
 		}
@@ -168,6 +175,9 @@ func dependencySectionForFlags(flags []string) string {
 }
 
 func packageRecordedIn(manifest projectManifest, pkgName, expectedSection string) (bool, string) {
+	if manifest.isEmpty() {
+		return true, expectedSection
+	}
 	if manifest.HasDependency(expectedSection, pkgName) {
 		return true, expectedSection
 	}
@@ -220,6 +230,10 @@ func (m projectManifest) HasDependency(section, name string) bool {
 	default:
 		return false
 	}
+}
+
+func (m projectManifest) isEmpty() bool {
+	return len(m.Dependencies) == 0 && len(m.DevDependencies) == 0 && len(m.OptionalDependencies) == 0
 }
 
 func readPackageJSON(path string) (packageJSON, error) {
