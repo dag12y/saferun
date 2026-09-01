@@ -84,7 +84,7 @@ func TestCheckDockerAvailability(t *testing.T) {
 func TestEnsureSandboxImage(t *testing.T) {
 	t.Run("image already exists", func(t *testing.T) {
 		runner := &fakeDocker{installed: true, daemonAvailable: true, imageExists: true}
-		available, err := EnsureSandboxImage(context.Background(), runner, "ghcr.io/dag12y/saferun-node:1.0.0")
+		available, err := EnsureSandboxImage(context.Background(), runner, "docker.io/dag12y/saferun-node:1.0.0")
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -98,7 +98,7 @@ func TestEnsureSandboxImage(t *testing.T) {
 
 	t.Run("image missing pulls successfully", func(t *testing.T) {
 		runner := &fakeDocker{installed: true, daemonAvailable: true, imageExists: false}
-		available, err := EnsureSandboxImage(context.Background(), runner, "ghcr.io/dag12y/saferun-node:1.0.0")
+		available, err := EnsureSandboxImage(context.Background(), runner, "docker.io/dag12y/saferun-node:1.0.0")
 		if err != nil {
 			t.Fatalf("expected success, got %v", err)
 		}
@@ -112,7 +112,7 @@ func TestEnsureSandboxImage(t *testing.T) {
 
 	t.Run("image pull fails", func(t *testing.T) {
 		runner := &fakeDocker{installed: true, daemonAvailable: true, imageExists: false, imagePullErr: errors.New("pull failed")}
-		_, err := EnsureSandboxImage(context.Background(), runner, "ghcr.io/dag12y/saferun-node:1.0.0")
+		_, err := EnsureSandboxImage(context.Background(), runner, "docker.io/dag12y/saferun-node:1.0.0")
 		if err == nil {
 			t.Fatal("expected pull failure")
 		}
@@ -120,7 +120,7 @@ func TestEnsureSandboxImage(t *testing.T) {
 
 	t.Run("image still missing after pull", func(t *testing.T) {
 		runner := &fakeDocker{installed: true, daemonAvailable: true, imageExists: false, inspectErr: errors.New("still missing")}
-		_, err := EnsureSandboxImage(context.Background(), runner, "ghcr.io/dag12y/saferun-node:1.0.0")
+		_, err := EnsureSandboxImage(context.Background(), runner, "docker.io/dag12y/saferun-node:1.0.0")
 		if err == nil {
 			t.Fatal("expected missing-after-pull failure")
 		}
@@ -130,21 +130,21 @@ func TestEnsureSandboxImage(t *testing.T) {
 func TestRunSetup(t *testing.T) {
 	t.Run("successful setup", func(t *testing.T) {
 		runner := &fakeDocker{installed: true, daemonAvailable: true, imageExists: true}
-		if err := RunWithDocker(context.Background(), runner, "ghcr.io/dag12y/saferun-node:1.0.0"); err != nil {
+		if err := RunWithDocker(context.Background(), runner, "docker.io/dag12y/saferun-node:1.0.0"); err != nil {
 			t.Fatalf("expected setup to succeed, got %v", err)
 		}
 	})
 
 	t.Run("docker unavailable", func(t *testing.T) {
 		runner := &fakeDocker{installed: false}
-		if err := RunWithDocker(context.Background(), runner, "ghcr.io/dag12y/saferun-node:1.0.0"); err == nil {
+		if err := RunWithDocker(context.Background(), runner, "docker.io/dag12y/saferun-node:1.0.0"); err == nil {
 			t.Fatal("expected docker unavailable error")
 		}
 	})
 
 	t.Run("image setup failure", func(t *testing.T) {
 		runner := &fakeDocker{installed: true, daemonAvailable: true, imageExists: false, imagePullErr: errors.New("no auth")}
-		if err := RunWithDocker(context.Background(), runner, "ghcr.io/dag12y/saferun-node:1.0.0"); err == nil {
+		if err := RunWithDocker(context.Background(), runner, "docker.io/dag12y/saferun-node:1.0.0"); err == nil {
 			t.Fatal("expected image setup failure")
 		}
 	})

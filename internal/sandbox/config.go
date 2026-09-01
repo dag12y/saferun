@@ -3,7 +3,7 @@ package sandbox
 import "time"
 
 const (
-	DefaultRegistry  = "ghcr.io"
+	DefaultRegistry  = "docker.io"
 	DefaultImageName = "dag12y/saferun-node"
 	DefaultImageTag  = "1.0.0"
 	DefaultImage     = DefaultRegistry + "/" + DefaultImageName + ":" + DefaultImageTag
