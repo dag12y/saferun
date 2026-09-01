@@ -54,13 +54,18 @@ func TestBuildDockerArgsSecurityHardening(t *testing.T) {
 	}
 }
 
-func TestRunNormalCommandSucceeds(t *testing.T) {
+func requireDockerRuntime(t *testing.T) {
+	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not available")
+		t.Fatalf("docker required for sandbox tests: %v", err)
 	}
 	if out, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
-		t.Skipf("docker runtime unavailable: %v: %s", err, out)
+		t.Fatalf("docker runtime unavailable: %v: %s", err, out)
 	}
+}
+
+func TestRunNormalCommandSucceeds(t *testing.T) {
+	requireDockerRuntime(t)
 
 	workspaceRoot := t.TempDir()
 	config := Config{
@@ -84,12 +89,7 @@ func TestRunNormalCommandSucceeds(t *testing.T) {
 }
 
 func TestRunTimeout(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not available")
-	}
-	if out, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
-		t.Skipf("docker runtime unavailable: %v: %s", err, out)
-	}
+	requireDockerRuntime(t)
 
 	workspaceRoot := t.TempDir()
 	config := Config{
@@ -102,22 +102,18 @@ func TestRunTimeout(t *testing.T) {
 		Timeout:   200 * time.Millisecond,
 	}
 
-	_, _, _, err := Run(config, "sh", "-c", "sleep 5")
+	_, _, _, err := Run(config, "sh", "-c", "sleep 5s")
 	if err == nil {
 		t.Fatal("expected sandbox timeout error")
 	}
 	if !strings.Contains(err.Error(), "sandbox timed out") {
 		t.Fatalf("expected timeout error, got: %v", err)
 	}
+	assertNoSafeRunContainers(t)
 }
 
 func TestRunCreatesIsolatedWorkspaceAndCleansUp(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not available")
-	}
-	if out, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
-		t.Skipf("docker runtime unavailable: %v: %s", err, out)
-	}
+	requireDockerRuntime(t)
 
 	workspaceRoot := t.TempDir()
 	config := Config{

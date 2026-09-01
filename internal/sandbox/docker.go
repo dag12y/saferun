@@ -63,6 +63,14 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 	}
 
 	containerName := "saferun-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	containerCleanup := func() {
+		if containerName == "" {
+			return
+		}
+		_ = stopAndRemoveContainer(containerName)
+	}
+	defer containerCleanup()
+
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
@@ -80,10 +88,6 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 			output,
 		)
 	}
-
-	defer func() {
-		_ = exec.Command("docker", "rm", "-f", containerName).Run()
-	}()
 
 	fmt.Println("Sandbox started:", containerName)
 
@@ -136,6 +140,27 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 
 	changes := analyzer.CompareSnapshots(before, after)
 	return changes, processFindings, networkConnections, nil
+}
+
+func stopAndRemoveContainer(containerName string) error {
+	if containerName == "" {
+		return nil
+	}
+
+	if out, err := exec.Command("docker", "stop", "-t", "5", containerName).CombinedOutput(); err != nil {
+		outStr := strings.TrimSpace(string(out))
+		if !strings.Contains(outStr, "No such container") && !strings.Contains(outStr, "is not running") {
+			return fmt.Errorf("stop sandbox container %s: %w: %s", containerName, err, outStr)
+		}
+	}
+
+	if out, err := exec.Command("docker", "rm", "-f", "-v", containerName).CombinedOutput(); err != nil {
+		outStr := strings.TrimSpace(string(out))
+		if !strings.Contains(outStr, "No such container") {
+			return fmt.Errorf("remove sandbox container %s: %w: %s", containerName, err, outStr)
+		}
+	}
+	return nil
 }
 
 func buildDockerArgs(config Config, command ...string) []string {
