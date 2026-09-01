@@ -99,10 +99,10 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 		return analyzer.FileChanges{}, nil, nil, fmt.Errorf("start sandbox network monitor: %w: %s", err, string(output))
 	}
 
-	commandString := strings.Join(command, " ")
 	installCtx, installCancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer installCancel()
-	installCmd := exec.CommandContext(installCtx, "docker", "exec", containerName, "sh", "-c", commandString)
+	installArgs := buildDockerExecArgs(containerName, command)
+	installCmd := exec.CommandContext(installCtx, "docker", installArgs...)
 	installOutput, err := installCmd.CombinedOutput()
 	fmt.Print(string(installOutput))
 	if err != nil {
@@ -167,6 +167,11 @@ func buildDockerArgs(config Config, command ...string) []string {
 		"-c",
 		strings.Join(command, " "),
 	}
+}
+
+func buildDockerExecArgs(containerName string, command []string) []string {
+	args := append([]string{"exec", containerName}, command...)
+	return args
 }
 
 func prepareLocalPackageInSandbox(workspace string, command []string) ([]string, error) {
