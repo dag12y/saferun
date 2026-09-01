@@ -139,29 +139,26 @@ saferun/
 go run ./cmd/saferun
 ```
 
+## Setup
+
+SafeRun requires Docker.
+
+After installing SafeRun, run:
+
+```bash
+saferun setup
+```
+
+This verifies Docker and prepares the SafeRun sandbox image.
+
+After setup:
+
+```bash
+saferun npm install express
+```
+
 ### Build
 
 ```bash
 go build -o saferun ./cmd/saferun
 ```
-
-### Build the sandbox image
-
-Build the development Node.js sandbox:
-
-```bash
-docker build -t saferun-node:dev ./sandbox/images/node
-```
-
-Docker
-Node.js/npm
-Git
-Run
-go run ./cmd/saferun
-Build
-go build -o saferun ./cmd/saferun
-Docker image
-
-Build the development Node.js sandbox:
-
-docker build -t saferun-node:dev ./sandbox/images/node

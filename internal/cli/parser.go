@@ -13,8 +13,13 @@ func Parse(args []string) (Command, error) {
 		return Command{}, fmt.Errorf("usage: saferun <package-manager> <operation> [package] [options]\n\nExample: saferun npm install express --save")
 	}
 
-	if len(args) == 1 && args[0] == "audit" {
-		return Command{PackageManager: "audit", Operation: "audit"}, nil
+	if len(args) == 1 {
+		switch args[0] {
+		case "audit":
+			return Command{PackageManager: "audit", Operation: "audit"}, nil
+		case "setup":
+			return Command{PackageManager: "setup", Operation: "setup"}, nil
+		}
 	}
 
 	if len(args) < 2 {

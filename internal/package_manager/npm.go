@@ -16,6 +16,7 @@ import (
 	"github.com/dag12y/saferun/internal/registry"
 	"github.com/dag12y/saferun/internal/risk"
 	"github.com/dag12y/saferun/internal/sandbox"
+	"github.com/dag12y/saferun/internal/setup"
 )
 
 type NPM struct {
@@ -54,6 +55,26 @@ type packageReport struct {
 }
 
 func (n NPM) Install(args []string) error {
+	if n.Sandbox.Image == "" {
+		n.Sandbox.Image = sandbox.DefaultImage
+	}
+	if n.SandboxRunner == nil {
+		if _, err := exec.LookPath("docker"); err == nil {
+			imgCtx, cancel := setup.DockerTimeoutContext()
+			defer cancel()
+			if _, err := setup.CheckSandboxImage(imgCtx, setup.RealDocker{}, n.Sandbox.Image); err != nil {
+				fmt.Println()
+				fmt.Println("SafeRun sandbox is not configured.")
+				fmt.Println()
+				fmt.Println("Run:")
+				fmt.Println()
+				fmt.Println("  saferun setup")
+				fmt.Println("before installing packages.")
+				return fmt.Errorf("sandbox image %q is not available; run 'saferun setup' first", n.Sandbox.Image)
+			}
+		}
+	}
+
 	parsed, err := ParseInstallArgs(args)
 	if err != nil {
 		return err
