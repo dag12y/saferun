@@ -2,10 +2,14 @@ package audit
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/dag12y/saferun/internal/cli"
 )
 
 func TestEventSerializesToJSON(t *testing.T) {
@@ -155,5 +159,117 @@ func TestSensitiveFieldsAreNotSerializedUnexpectedly(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "token=redacted") {
 		t.Fatalf("safe reason should still be serialized: %s", string(data))
+	}
+}
+
+func TestReadRecentReturnsNewestFirstAndIgnoresMalformed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	content := strings.Join([]string{
+		`{"timestamp":"2026-08-31T12:00:00Z","packages":["alpha"],"decision":"ALLOW"}`,
+		`not-json`,
+		`{"timestamp":"2026-09-01T09:00:00Z","packages":["beta"],"decision":"BLOCK"}`,
+		`{"timestamp":"2026-09-01T10:00:00Z","packages":["gamma"],"decision":"CONFIRMATION_REQUIRED"}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	events, err := ReadRecentAt(path, 20)
+	if err != nil {
+		t.Fatalf("read recent events: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 valid events, got %d", len(events))
+	}
+	if events[0].Packages[0] != "gamma" {
+		t.Fatalf("expected newest event first, got %#v", events[0].Packages)
+	}
+	if events[2].Packages[0] != "alpha" {
+		t.Fatalf("expected oldest event last, got %#v", events[2].Packages)
+	}
+}
+
+func TestReadRecentRespectsDefaultLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	var lines []string
+	for i := 0; i < 25; i++ {
+		timestamp := time.Date(2026, 9, 1, 0, i, 0, 0, time.UTC).Format(time.RFC3339)
+		lines = append(lines, fmt.Sprintf(`{"timestamp":"%s","packages":["pkg-%d"],"decision":"ALLOW"}`, timestamp, i))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	events, err := ReadRecentAt(path, 20)
+	if err != nil {
+		t.Fatalf("read recent events: %v", err)
+	}
+	if len(events) != 20 {
+		t.Fatalf("expected 20 events, got %d", len(events))
+	}
+	if events[0].Packages[0] != "pkg-24" {
+		t.Fatalf("expected newest first, got %s", events[0].Packages[0])
+	}
+	if events[len(events)-1].Packages[0] != "pkg-5" {
+		t.Fatalf("expected oldest included in limit window, got %s", events[len(events)-1].Packages[0])
+	}
+}
+
+func TestReadRecentEmptyAndMissingAuditLogs(t *testing.T) {
+	emptyFile := filepath.Join(t.TempDir(), "empty.jsonl")
+	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+
+	events, err := ReadRecentAt(emptyFile, 20)
+	if err != nil {
+		t.Fatalf("read empty audit log: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events from empty file, got %d", len(events))
+	}
+
+	missing, err := ReadRecentAt(filepath.Join(t.TempDir(), "missing.jsonl"), 20)
+	if err != nil {
+		t.Fatalf("read missing audit log: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("expected no events for missing file, got %d", len(missing))
+	}
+}
+
+func TestFormatRecentIncludesRollbackAndTruncatesPackages(t *testing.T) {
+	longPackage := strings.Repeat("/very/long/path/", 8) + "package-name@1.2.3"
+	formatted := FormatRecent([]Event{{
+		Timestamp:    "2026-09-01T13:45:00Z",
+		Packages:     []string{longPackage},
+		Risk:         "HIGH",
+		Decision:     DecisionAllow,
+		Approval:     ApprovalAccepted,
+		Installation: InstallationSuccess,
+		Verification: VerificationPassed,
+		Rollback:     RollbackSucceeded,
+	}})
+	if !strings.Contains(formatted, "ALLOW") {
+		t.Fatalf("expected ALLOW in formatted output: %q", formatted)
+	}
+	if !strings.Contains(formatted, "ROLLBACK: SUCCESS") {
+		t.Fatalf("expected rollback formatting in output: %q", formatted)
+	}
+	if strings.Contains(formatted, longPackage) && len(formatted) > 400 {
+		t.Fatal("expected long package names to be truncated before formatting")
+	}
+}
+
+func TestParseAuditCommandSupportsAllFlag(t *testing.T) {
+	cmd, err := cli.Parse([]string{"audit", "--all"})
+	if err != nil {
+		t.Fatalf("parse audit --all: %v", err)
+	}
+	if cmd.PackageManager != "audit" || cmd.Operation != "audit" {
+		t.Fatalf("unexpected command: %#v", cmd)
+	}
+	if len(cmd.Arguments) != 1 || cmd.Arguments[0] != "--all" {
+		t.Fatalf("unexpected audit arguments: %#v", cmd.Arguments)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -126,23 +127,29 @@ func ReadRecent(limit int) ([]Event, error) {
 }
 
 func ReadRecentAt(path string, limit int) ([]Event, error) {
-	if limit <= 0 {
-		limit = 20
-	}
+	events, _, err := ReadRecentWithStats(path, limit)
+	return events, err
+}
+
+func ReadRecentWithStats(path string, limit int) ([]Event, int, error) {
 	if path == "" {
 		path = defaultPath
+	}
+	if limit <= 0 {
+		limit = 20
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, 0, nil
 		}
-		return nil, fmt.Errorf("open audit log: %w", err)
+		return nil, 0, fmt.Errorf("open audit log: %w", err)
 	}
 	defer file.Close()
 
 	var events []Event
+	var malformed int
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -151,45 +158,103 @@ func ReadRecentAt(path string, limit int) ([]Event, error) {
 		}
 		var event Event
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			malformed++
 			continue
 		}
 		events = append(events, event)
-		if len(events) >= limit {
-			break
-		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read audit log: %w", err)
+		return nil, malformed, fmt.Errorf("read audit log: %w", err)
 	}
-	return events, nil
+
+	sort.SliceStable(events, func(i, j int) bool {
+		t1, t2 := parseTimestamp(events[i].Timestamp), parseTimestamp(events[j].Timestamp)
+		if t1.Equal(t2) {
+			return false
+		}
+		return t1.After(t2)
+	})
+
+	if limit > 0 && len(events) > limit {
+		events = events[:limit]
+	}
+	return events, malformed, nil
+}
+
+func formatPackageSummary(packages []string) string {
+	if len(packages) == 0 {
+		return "-"
+	}
+	summary := strings.Join(packages, ", ")
+	if len(summary) <= 32 {
+		return summary
+	}
+	return summary[:29] + "..."
+}
+
+func formatRollback(value Rollback) string {
+	switch value {
+	case RollbackSucceeded:
+		return "ROLLBACK: SUCCESS"
+	case RollbackFailed:
+		return "ROLLBACK: FAILED"
+	default:
+		return "-"
+	}
+}
+
+func formatApproval(value Approval) string {
+	if value == "" || value == ApprovalNotNeeded {
+		return "-"
+	}
+	return string(value)
+}
+
+func formatValue(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func parseTimestamp(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func FormatRecent(events []Event) string {
 	if len(events) == 0 {
 		return "(no audit events recorded)"
 	}
-	var lines []string
+
+	head := "TIMESTAMP           | DECISION     | PACKAGE                         | RISK    | INSTALL      | VERIFY       | ROLLBACK           | APPROVAL"
+	lines := []string{head, strings.Repeat("-", len(head))}
 	for _, event := range events {
-		packageSummary := "unknown"
-		if len(event.Packages) > 0 {
-			packageSummary = strings.Join(event.Packages, ", ")
-		}
 		decision := string(event.Decision)
 		if decision == "" {
 			decision = "UNKNOWN"
 		}
-		line := fmt.Sprintf("%-18s  %-16s  %-18s  %-8s  %-12s",
-			decision,
+		line := fmt.Sprintf("%-19s | %-12s | %-31s | %-7s | %-12s | %-12s | %-18s | %-12s",
 			formatTimestamp(event.Timestamp),
-			packageSummary,
+			decision,
+			formatPackageSummary(event.Packages),
 			event.Risk,
-			event.Installation,
+			formatValue(string(event.Installation)),
+			formatValue(string(event.Verification)),
+			formatRollback(event.Rollback),
+			formatApproval(event.Approval),
 		)
-		if event.Approval != "" {
-			line = fmt.Sprintf("%s  %s", line, event.Approval)
+		if event.Reason != "" {
+			lines = append(lines, "  reason: "+event.Reason)
 		}
-		if event.Rollback != "" {
-			line = fmt.Sprintf("%s  %s", line, event.Rollback)
+		if event.Score > 0 || event.FindingCount > 0 {
+			lines = append(lines, fmt.Sprintf("  score: %d | findings: %d", event.Score, event.FindingCount))
 		}
 		lines = append(lines, line)
 	}

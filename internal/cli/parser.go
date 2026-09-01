@@ -22,14 +22,17 @@ func Parse(args []string) (Command, error) {
 		}
 	}
 
-	if len(args) < 2 {
-		return Command{}, fmt.Errorf("usage: saferun <package-manager> <operation> [package] [options]\n\nExample: saferun npm install express --save")
-	}
-
 	if len(args) == 2 {
+		if args[0] == "audit" && args[1] == "--all" {
+			return Command{PackageManager: "audit", Operation: "audit", Arguments: []string{"--all"}}, nil
+		}
 		if args[0] == "npm" && args[1] == "install" {
 			return Command{}, fmt.Errorf("usage: saferun npm install <package> [options]\n\nExample: saferun npm install express --save")
 		}
+	}
+
+	if len(args) < 2 {
+		return Command{}, fmt.Errorf("usage: saferun <package-manager> <operation> [package] [options]\n\nExample: saferun npm install express --save")
 	}
 
 	return Command{

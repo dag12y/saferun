@@ -31,14 +31,33 @@ func main() {
 
 	switch command.PackageManager {
 	case "audit":
-		events, err := audit.ReadRecent(20)
+		showAll := false
+		if len(command.Arguments) == 1 && command.Arguments[0] == "--all" {
+			showAll = true
+		}
+		events, malformed, err := audit.ReadRecentWithStats(audit.DefaultPath(), 0)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: read audit log: %v\n", err)
 			os.Exit(1)
 		}
+		if !showAll && len(events) > 20 {
+			events = events[:20]
+		}
+		if malformed > 0 {
+			fmt.Printf("Warning: skipped %d malformed audit entry(s).\n\n", malformed)
+		}
 		fmt.Println("SafeRun Audit Log")
 		fmt.Println("-----------------")
 		fmt.Println(audit.FormatRecent(events))
+		if showAll {
+			fmt.Printf("\nShowing %d total event(s).\n", len(events))
+		} else if len(events) == 0 {
+			fmt.Println("\nShowing 0 most recent events. Use 'saferun audit --all' to view all events.")
+		} else if len(events) < 20 {
+			fmt.Printf("\nShowing %d most recent event(s). Use 'saferun audit --all' to view all events.\n", len(events))
+		} else {
+			fmt.Println("\nShowing 20 most recent events. Use 'saferun audit --all' to view all events.")
+		}
 		return
 	case "setup":
 		fmt.Println("SafeRun")
