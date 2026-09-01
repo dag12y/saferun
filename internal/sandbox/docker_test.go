@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,6 +52,14 @@ func TestBuildDockerArgsSecurityHardening(t *testing.T) {
 		if strings.Contains(combined, forbidden) {
 			t.Fatalf("docker args unexpectedly include %q in %v", forbidden, args)
 		}
+	}
+}
+
+func TestBuildDockerExecArgsPreservesCommandSegments(t *testing.T) {
+	got := buildDockerExecArgs("saferun-test", []string{"sh", "-c", "sleep 5"})
+	want := []string{"exec", "saferun-test", "sh", "-c", "sleep 5"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected docker exec args: got %v want %v", got, want)
 	}
 }
 

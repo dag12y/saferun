@@ -101,7 +101,7 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 
 	installCtx, installCancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer installCancel()
-	installArgs := append([]string{"exec", containerName}, command...)
+	installArgs := buildDockerExecArgs(containerName, command)
 	installCmd := exec.CommandContext(installCtx, "docker", installArgs...)
 	installOutput, err := installCmd.CombinedOutput()
 	fmt.Print(string(installOutput))
@@ -167,6 +167,11 @@ func buildDockerArgs(config Config, command ...string) []string {
 		"-c",
 		strings.Join(command, " "),
 	}
+}
+
+func buildDockerExecArgs(containerName string, command []string) []string {
+	args := append([]string{"exec", containerName}, command...)
+	return args
 }
 
 func prepareLocalPackageInSandbox(workspace string, command []string) ([]string, error) {
