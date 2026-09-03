@@ -15,10 +15,18 @@ func Parse(args []string) (Command, error) {
 
 	if len(args) == 1 {
 		switch args[0] {
+		case "--help", "-h", "help":
+			return Command{PackageManager: "help"}, nil
+		case "--version", "version":
+			return Command{PackageManager: "version"}, nil
 		case "audit":
 			return Command{PackageManager: "audit", Operation: "audit"}, nil
 		case "setup":
 			return Command{PackageManager: "setup", Operation: "setup"}, nil
+		case "npm":
+			return Command{}, fmt.Errorf("usage: saferun npm install <package> [options]\n\nExample: saferun npm install express --save")
+		default:
+			return Command{}, fmt.Errorf("unknown command %q\n\nRun \"saferun --help\" for usage", args[0])
 		}
 	}
 

@@ -29,6 +29,7 @@ jobs:
       - name: Build release binaries
         env:
           CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
         run: |
           mkdir -p dist
           set -eu
@@ -50,7 +51,7 @@ jobs:
               output="${output}.exe"
             fi
 
-            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags='-s -w' -o "dist/${output}" ./cmd/saferun
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags="-s -w -X github.com/dag12y/saferun/internal/version.Version=${VERSION}" -o "dist/${output}" ./cmd/saferun
           done
 
       - name: Generate checksums
