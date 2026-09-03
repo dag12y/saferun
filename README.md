@@ -231,6 +231,7 @@ Release binaries report the version injected from their Git tag. Local builds wi
 ```bash
 go build -o saferun ./cmd/saferun
 ```
+
 ## Releases
 
 SafeRun provides prebuilt release binaries for:

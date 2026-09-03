@@ -33,16 +33,19 @@ function Get-SafeRunInstallDirectory {
 }
 
 function Get-SafeRunArchitecture {
-    $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-    return Convert-SafeRunArchitecture -Architecture $architecture
+    $nativeArchitecture = [Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITEW6432')
+    if ([string]::IsNullOrWhiteSpace($nativeArchitecture)) {
+        $nativeArchitecture = [Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE')
+    }
+    return Convert-SafeRunArchitecture -Architecture $nativeArchitecture
 }
 
 function Convert-SafeRunArchitecture {
     param([Parameter(Mandatory = $true)][string]$Architecture)
 
-    switch ($Architecture) {
-        'X64' { return 'amd64' }
-        'Arm64' { return 'arm64' }
+    switch ($Architecture.ToUpperInvariant()) {
+        'AMD64' { return 'amd64' }
+        'ARM64' { return 'arm64' }
         default { throw "Unsupported Windows architecture: $Architecture. Supported architectures: amd64 and arm64." }
     }
 }
