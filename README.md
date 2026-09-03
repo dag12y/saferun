@@ -171,7 +171,7 @@ If `~/.local/bin` is not in your `PATH`, the installer prints the command needed
 
 ### Manual GitHub Release Installation
 
-Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.0.2 release](https://github.com/dag12y/saferun/releases/tag/v1.0.2). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
+Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.0.3 release](https://github.com/dag12y/saferun/releases/tag/v1.0.3). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -186,6 +186,34 @@ saferun npm install lodash
 ```
 
 SafeRun analyzes the package in an isolated Docker sandbox before allowing the host-side installation.
+
+## Windows Installation
+
+SafeRun provides Windows release binaries for `amd64` and `arm64`. From PowerShell, download `install.ps1` from the repository or a trusted release-hosting location and run:
+
+```powershell
+.\install.ps1
+```
+
+The installer downloads the current configured GitHub Release, verifies `SHA256SUMS`, and installs `saferun.exe` to `%LOCALAPPDATA%\SafeRun\bin` by default. It adds that directory to the **user** `PATH` without requiring Administrator privileges. Open a new PowerShell session after installation so the updated `PATH` is loaded.
+
+To update, run the installer again. To remove SafeRun, delete `%LOCALAPPDATA%\SafeRun\bin\saferun.exe` and remove that directory from the user `PATH` in **System Properties** or PowerShell. The installer does not install Docker.
+
+Configuration variables:
+
+- `SAFERUN_VERSION`: release tag, such as `v1.0.3`
+- `SAFERUN_RELEASE_BASE_URL`: HTTPS release base URL; defaults to `https://github.com/dag12y/saferun/releases/download`
+- `SAFERUN_INSTALL_DIR`: per-user installation directory; defaults to `%LOCALAPPDATA%\SafeRun\bin`
+
+For example:
+
+```powershell
+$env:SAFERUN_VERSION = 'v1.0.3'
+$env:SAFERUN_INSTALL_DIR = "$env:LOCALAPPDATA\SafeRun\bin"
+.\install.ps1
+```
+
+Troubleshooting: use a new PowerShell session after changing `PATH`, confirm Docker is installed and running with `saferun setup`, and ensure the selected release contains the matching Windows binary and checksum entry.
 
 ### CLI Help and Version
 
