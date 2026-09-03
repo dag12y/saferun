@@ -162,3 +162,12 @@ saferun npm install express
 ```bash
 go build -o saferun ./cmd/saferun
 ```
+## Releases
+
+SafeRun provides prebuilt release binaries for:
+
+- Linux
+- macOS
+- Windows
+
+The release process publishes cross-platform binaries and SHA256 checksums for each tagged version.

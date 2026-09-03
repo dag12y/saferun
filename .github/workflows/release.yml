@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Build release binaries
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          set -eu
+
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "darwin amd64"
+            "darwin arm64"
+            "windows amd64"
+            "windows arm64"
+          )
+
+          for target in "${targets[@]}"; do
+            set -- $target
+            GOOS=$1 GOARCH=$2
+            output="saferun-${GOOS}-${GOARCH}"
+            if [ "$GOOS" = "windows" ]; then
+              output="${output}.exe"
+            fi
+
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags='-s -w' -o "dist/${output}" ./cmd/saferun
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum saferun-* > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SafeRun ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/saferun-linux-amd64
+            dist/saferun-linux-arm64
+            dist/saferun-darwin-amd64
+            dist/saferun-darwin-arm64
+            dist/saferun-windows-amd64.exe
+            dist/saferun-windows-arm64.exe
+            dist/SHA256SUMS
