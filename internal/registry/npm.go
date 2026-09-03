@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -101,72 +102,72 @@ func (r NPMRegistry) Download(pkg PackageInfo) (string, error) {
 	}
 	defer gzipReader.Close()
 
-	tarReader := tar.NewReader(gzipReader)
+	if err := extractNPMPackage(gzipReader, dir); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+
+	return dir, nil
+}
+
+func extractNPMPackage(source io.Reader, destination string) error {
+	tarReader := tar.NewReader(source)
+	root := filepath.Clean(destination)
 
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
-			break
+			return nil
 		}
-
 		if err != nil {
-			os.RemoveAll(dir)
-			return "", fmt.Errorf("read archive: %w", err)
+			return fmt.Errorf("read archive: %w", err)
 		}
 
-		name := filepath.Clean(header.Name)
-		name = strings.TrimPrefix(name, "package/")
+		archiveName := header.Name
+		if strings.Contains(archiveName, `\`) {
+			return fmt.Errorf("unsafe archive path: %s", archiveName)
+		}
+		cleanName := path.Clean(archiveName)
+		if cleanName == "." || path.IsAbs(cleanName) || cleanName == ".." || strings.HasPrefix(cleanName, "../") {
+			return fmt.Errorf("unsafe archive path: %s", archiveName)
+		}
+		if cleanName != "package" && !strings.HasPrefix(cleanName, "package/") {
+			return fmt.Errorf("invalid npm archive path: %s", archiveName)
+		}
 
+		name := strings.TrimPrefix(cleanName, "package/")
 		if name == "" {
 			continue
 		}
-
-		target := filepath.Join(dir, name)
-
-		// Prevent path traversal.
-		if !strings.HasPrefix(
-			target,
-			filepath.Clean(dir)+string(os.PathSeparator),
-		) {
-			os.RemoveAll(dir)
-			return "", fmt.Errorf("unsafe archive path: %s", header.Name)
+		target := filepath.Join(root, filepath.FromSlash(name))
+		relative, err := filepath.Rel(root, target)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) || filepath.IsAbs(relative) {
+			return fmt.Errorf("unsafe archive path: %s", archiveName)
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0755); err != nil {
-				os.RemoveAll(dir)
-				return "", fmt.Errorf("create directory: %w", err)
+				return fmt.Errorf("create directory: %w", err)
 			}
-
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				os.RemoveAll(dir)
-				return "", fmt.Errorf("create parent directory: %w", err)
+				return fmt.Errorf("create parent directory: %w", err)
 			}
-
-			file, err := os.OpenFile(
-				target,
-				os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
-				0644,
-			)
+			file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 			if err != nil {
-				os.RemoveAll(dir)
-				return "", fmt.Errorf("create file: %w", err)
+				return fmt.Errorf("create file: %w", err)
 			}
-
-			if _, err := io.Copy(file, tarReader); err != nil {
-				file.Close()
-				os.RemoveAll(dir)
-				return "", fmt.Errorf("extract file: %w", err)
+			_, copyErr := io.Copy(file, tarReader)
+			closeErr := file.Close()
+			if copyErr != nil {
+				return fmt.Errorf("extract file: %w", copyErr)
 			}
-
-			if err := file.Close(); err != nil {
-				os.RemoveAll(dir)
-				return "", fmt.Errorf("close file: %w", err)
+			if closeErr != nil {
+				return fmt.Errorf("close file: %w", closeErr)
 			}
+		default:
+			return fmt.Errorf("unsupported archive entry type for %s", archiveName)
 		}
 	}
-
-	return dir, nil
 }
