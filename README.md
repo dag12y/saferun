@@ -187,6 +187,17 @@ saferun npm install lodash
 
 SafeRun analyzes the package in an isolated Docker sandbox before allowing the host-side installation.
 
+### CLI Help and Version
+
+Use the built-in help and version commands:
+
+```bash
+saferun --help
+saferun --version
+```
+
+Release binaries report the version injected from their Git tag. Local builds without release metadata report `SafeRun dev`.
+
 ### Build
 
 ```bash

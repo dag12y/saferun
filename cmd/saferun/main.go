@@ -10,18 +10,28 @@ import (
 	"github.com/dag12y/saferun/internal/registry"
 	"github.com/dag12y/saferun/internal/sandbox"
 	"github.com/dag12y/saferun/internal/setup"
+	"github.com/dag12y/saferun/internal/version"
 )
 
 func main() {
-	fmt.Println("SafeRun")
-	fmt.Println("Secure package installation sandbox")
-	fmt.Println()
-
 	command, err := cli.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
+
+	switch command.PackageManager {
+	case "help":
+		fmt.Print(cli.HelpText(version.Version))
+		return
+	case "version":
+		fmt.Printf("SafeRun %s\n", version.Version)
+		return
+	}
+
+	fmt.Println("SafeRun")
+	fmt.Println("Secure package installation sandbox")
+	fmt.Println()
 
 	config := sandbox.DefaultConfig()
 	dockerCtx, dockerCancel := setup.DockerTimeoutContext()
