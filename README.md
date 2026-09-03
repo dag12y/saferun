@@ -157,6 +157,36 @@ After setup:
 saferun npm install express
 ```
 
+## Install
+
+Install the configured SafeRun release for Linux or macOS:
+
+```bash
+curl -fsSL https://YOUR-DOMAIN/install.sh | sh
+```
+
+`YOUR-DOMAIN` is temporary and will be replaced when the SafeRun website is available. The installer downloads the matching GitHub Release binary, verifies its SHA-256 checksum, and installs it to `~/.local/bin/saferun` without requiring Go or a repository checkout. Set `SAFERUN_VERSION` to install a different release.
+
+If `~/.local/bin` is not in your `PATH`, the installer prints the command needed to add it. SafeRun requires Docker for sandboxed package analysis; the installer does not install Docker.
+
+### Manual GitHub Release Installation
+
+Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.0.2 release](https://github.com/dag12y/saferun/releases/tag/v1.0.2). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
+
+```bash
+mkdir -p ~/.local/bin
+install -m 0755 saferun-linux-amd64 ~/.local/bin/saferun
+```
+
+After either installation method:
+
+```bash
+saferun setup
+saferun npm install lodash
+```
+
+SafeRun analyzes the package in an isolated Docker sandbox before allowing the host-side installation.
+
 ### Build
 
 ```bash
