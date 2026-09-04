@@ -171,7 +171,7 @@ If `~/.local/bin` is not in your `PATH`, the installer prints the command needed
 
 ### Manual GitHub Release Installation
 
-Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.0.3 release](https://github.com/dag12y/saferun/releases/tag/v1.0.3). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
+Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.0.5 release](https://github.com/dag12y/saferun/releases/tag/v1.0.5). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -201,14 +201,14 @@ To update, run the installer again. To remove SafeRun, delete `%LOCALAPPDATA%\Sa
 
 Configuration variables:
 
-- `SAFERUN_VERSION`: release tag, such as `v1.0.3`
+- `SAFERUN_VERSION`: release tag, such as `v1.0.5`
 - `SAFERUN_RELEASE_BASE_URL`: HTTPS release base URL; defaults to `https://github.com/dag12y/saferun/releases/download`
 - `SAFERUN_INSTALL_DIR`: per-user installation directory; defaults to `%LOCALAPPDATA%\SafeRun\bin`
 
 For example:
 
 ```powershell
-$env:SAFERUN_VERSION = 'v1.0.3'
+$env:SAFERUN_VERSION = 'v1.0.5'
 $env:SAFERUN_INSTALL_DIR = "$env:LOCALAPPDATA\SafeRun\bin"
 .\install.ps1
 ```

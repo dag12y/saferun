@@ -5,7 +5,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$DefaultVersion = 'v1.0.3'
+$DefaultVersion = 'v1.0.5'
 $DefaultReleaseBaseUrl = 'https://github.com/dag12y/saferun/releases/download'
 
 function Get-SafeRunVersion {
