@@ -13,12 +13,14 @@ Usage:
 Commands:
   setup       Check and prepare the SafeRun environment
   npm         Securely install npm packages
-  audit       View the SafeRun audit log
+  audit       View or clear the SafeRun audit log
   version     Show SafeRun version
   help        Show help information
 
 Options:
   -h, --help  Show help
       --version  Show version information
+  audit --all    Show all audit events
+  audit --clear  Clear audit history
 `, version)
 }

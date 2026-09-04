@@ -42,8 +42,22 @@ func main() {
 	switch command.PackageManager {
 	case "audit":
 		showAll := false
-		if len(command.Arguments) == 1 && command.Arguments[0] == "--all" {
-			showAll = true
+		clear := false
+		if len(command.Arguments) == 1 {
+			switch command.Arguments[0] {
+			case "--all":
+				showAll = true
+			case "--clear":
+				clear = true
+			}
+		}
+		if clear {
+			if err := audit.Clear(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: clear audit log: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("SafeRun audit history cleared.")
+			return
 		}
 		limit := 10
 		if showAll {

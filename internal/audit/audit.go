@@ -75,6 +75,20 @@ func DefaultPath() string {
 	return defaultPath
 }
 
+func Clear() error {
+	return ClearAt(defaultPath)
+}
+
+func ClearAt(path string) error {
+	if path == "" {
+		path = defaultPath
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove audit log: %w", err)
+	}
+	return nil
+}
+
 type Logger struct {
 	Path string
 }

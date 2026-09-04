@@ -258,6 +258,23 @@ func TestReadRecentEmptyAndMissingAuditLogs(t *testing.T) {
 	}
 }
 
+func TestClearAtRemovesAuditLogAndIgnoresMissingLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := os.WriteFile(path, []byte("event\n"), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	if err := ClearAt(path); err != nil {
+		t.Fatalf("clear audit log: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected audit log to be removed, stat error: %v", err)
+	}
+	if err := ClearAt(path); err != nil {
+		t.Fatalf("clear missing audit log: %v", err)
+	}
+}
+
 func TestFormatRecentIncludesRollbackAndTruncatesPackages(t *testing.T) {
 	longPackage := strings.Repeat("/very/long/path/", 8) + "package-name@1.2.3"
 	formatted := FormatRecent([]Event{{
@@ -290,6 +307,19 @@ func TestParseAuditCommandSupportsAllFlag(t *testing.T) {
 		t.Fatalf("unexpected command: %#v", cmd)
 	}
 	if len(cmd.Arguments) != 1 || cmd.Arguments[0] != "--all" {
+		t.Fatalf("unexpected audit arguments: %#v", cmd.Arguments)
+	}
+}
+
+func TestParseAuditCommandSupportsClearFlag(t *testing.T) {
+	cmd, err := cli.Parse([]string{"audit", "--clear"})
+	if err != nil {
+		t.Fatalf("parse audit --clear: %v", err)
+	}
+	if cmd.PackageManager != "audit" || cmd.Operation != "audit" {
+		t.Fatalf("unexpected command: %#v", cmd)
+	}
+	if len(cmd.Arguments) != 1 || cmd.Arguments[0] != "--clear" {
 		t.Fatalf("unexpected audit arguments: %#v", cmd.Arguments)
 	}
 }

@@ -31,12 +31,17 @@ func Parse(args []string) (Command, error) {
 	}
 
 	if len(args) == 2 {
-		if args[0] == "audit" && args[1] == "--all" {
-			return Command{PackageManager: "audit", Operation: "audit", Arguments: []string{"--all"}}, nil
+		if args[0] == "audit" && (args[1] == "--all" || args[1] == "--clear") {
+			return Command{PackageManager: "audit", Operation: "audit", Arguments: []string{args[1]}}, nil
 		}
 		if args[0] == "npm" && args[1] == "install" {
 			return Command{}, fmt.Errorf("usage: saferun npm install <package> [options]\n\nExample: saferun npm install express --save")
 		}
+	}
+
+	if len(args) == 3 && args[0] == "audit" &&
+		((args[1] == "--all" && args[2] == "--clear") || (args[1] == "--clear" && args[2] == "--all")) {
+		return Command{}, fmt.Errorf("audit options --all and --clear cannot be combined")
 	}
 
 	if len(args) < 2 {
