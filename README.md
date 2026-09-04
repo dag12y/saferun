@@ -241,3 +241,7 @@ SafeRun provides prebuilt release binaries for:
 - Windows
 
 The release process publishes cross-platform binaries and SHA256 checksums for each tagged version.
+
+## License
+
+SafeRun is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full license text.
