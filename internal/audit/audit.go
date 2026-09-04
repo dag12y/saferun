@@ -135,8 +135,8 @@ func ReadRecentWithStats(path string, limit int) ([]Event, int, error) {
 	if path == "" {
 		path = defaultPath
 	}
-	if limit <= 0 {
-		limit = 20
+	if limit == 0 {
+		limit = 10
 	}
 
 	file, err := os.Open(path)

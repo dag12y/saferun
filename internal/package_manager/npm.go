@@ -11,6 +11,7 @@ import (
 
 	"github.com/dag12y/saferun/internal/analyzer"
 	"github.com/dag12y/saferun/internal/audit"
+	"github.com/dag12y/saferun/internal/cli"
 	"github.com/dag12y/saferun/internal/policy"
 	"github.com/dag12y/saferun/internal/prompt"
 	"github.com/dag12y/saferun/internal/registry"
@@ -218,50 +219,50 @@ func (n NPM) Install(args []string) error {
 	logger := n.auditLogger()
 
 	fmt.Println()
-	fmt.Println("Behavior Analysis")
-	fmt.Println("-----------------")
+	fmt.Println(cli.Heading("Behavior Analysis"))
+	fmt.Println(cli.Muted("-----------------"))
 	if len(behaviorFindings) == 0 {
-		fmt.Println("  ✓ No suspicious file behavior detected")
+		fmt.Println(cli.Success("  ✓ No suspicious file behavior detected"))
 	} else {
 		for _, finding := range behaviorFindings {
-			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Path, finding.Severity, finding.Description)
+			fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("  ⚠ %s [%s]: %s", finding.Path, finding.Severity, finding.Description)))
 		}
 	}
 
 	fmt.Println()
-	fmt.Println("Process Analysis")
-	fmt.Println("----------------")
+	fmt.Println(cli.Heading("Process Analysis"))
+	fmt.Println(cli.Muted("----------------"))
 	if len(processFindings) == 0 {
-		fmt.Println("  ✓ No suspicious processes detected")
+		fmt.Println(cli.Success("  ✓ No suspicious processes detected"))
 	} else {
 		for _, finding := range processFindings {
-			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Command, finding.Severity, finding.Reason)
+			fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("  ⚠ %s [%s]: %s", finding.Command, finding.Severity, finding.Reason)))
 		}
 	}
 
 	fmt.Println()
-	fmt.Println("Network Analysis")
-	fmt.Println("----------------")
+	fmt.Println(cli.Heading("Network Analysis"))
+	fmt.Println(cli.Muted("----------------"))
 	expectedConnections := analyzer.ExpectedRegistryConnections(networkConnections)
 	if len(expectedConnections) > 0 {
 		for _, destination := range expectedConnections {
-			fmt.Printf("  ✓ %s\n", destination)
+			fmt.Println(cli.Success(fmt.Sprintf("  ✓ %s", destination)))
 		}
 	}
 	if len(analyzer.AnalyzeNetworkConnections(networkConnections)) == 0 && len(expectedConnections) == 0 {
-		fmt.Println("  ✓ No unexpected network connections detected")
+		fmt.Println(cli.Success("  ✓ No unexpected network connections detected"))
 	} else {
 		for _, finding := range analyzer.AnalyzeNetworkConnections(networkConnections) {
-			fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Name, finding.Severity, finding.Description)
+			fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("  ⚠ %s [%s]: %s", finding.Name, finding.Severity, finding.Description)))
 		}
 	}
 	if len(expectedConnections) > 0 && len(analyzer.AnalyzeNetworkConnections(networkConnections)) == 0 {
-		fmt.Println("  ✓ Registry traffic was allowed")
+		fmt.Println(cli.Success("  ✓ Registry traffic was allowed"))
 	}
 
 	fmt.Println()
-	fmt.Println("SafeRun Security Report")
-	fmt.Println("-----------------------")
+	fmt.Println(cli.Heading("SafeRun Security Report"))
+	fmt.Println(cli.Muted("-----------------------"))
 	if len(packageReports) > 1 {
 		fmt.Printf("Packages: %d\n\n", len(packageReports))
 	}
@@ -271,52 +272,53 @@ func (n NPM) Install(args []string) error {
 		fmt.Printf("  Dependencies: %d\n", pkgReport.Analysis.Dependencies)
 		fmt.Printf("  Dev dependencies: %d\n", pkgReport.Analysis.DevDependencies)
 		fmt.Println()
-		fmt.Println("Lifecycle Scripts")
+		fmt.Println(cli.Heading("Lifecycle Scripts"))
 		if len(pkgReport.Analysis.Scripts) == 0 {
-			fmt.Println("  ✓ None detected")
+			fmt.Println(cli.Success("  ✓ None detected"))
 		} else {
 			for name, command := range pkgReport.Analysis.Scripts {
-				fmt.Printf("  ⚠ %s: %s\n", name, command)
+				fmt.Println(cli.Warning(fmt.Sprintf("  ⚠ %s: %s", name, command)))
 				for _, finding := range analyzer.AnalyzeScript(command) {
-					fmt.Printf("      └─ %s [%s]\n", finding.Description, finding.Severity)
+					fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("      └─ %s [%s]", finding.Description, finding.Severity)))
 				}
 			}
 		}
 		fmt.Println()
-		fmt.Println("File Analysis")
+		fmt.Println(cli.Heading("File Analysis"))
 		if len(pkgReport.FileFindings) == 0 {
-			fmt.Println("  ✓ No suspicious files detected")
+			fmt.Println(cli.Success("  ✓ No suspicious files detected"))
 		} else {
 			for _, finding := range pkgReport.FileFindings {
-				fmt.Printf("  ⚠ %s [%s]: %s\n", finding.Path, finding.Severity, finding.Description)
+				fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("  ⚠ %s [%s]: %s", finding.Path, finding.Severity, finding.Description)))
 			}
 		}
 		fmt.Println()
 	}
-	fmt.Println("Risk Summary")
-	fmt.Println("------------")
-	fmt.Printf("Score: %d\n", result.Score)
-	fmt.Printf("Findings: %d\n\n", result.FindingCount)
-	fmt.Println("Reasons:")
+	fmt.Println(cli.Heading("Risk Summary"))
+	fmt.Println(cli.Muted("------------"))
+	fmt.Println(cli.Risk(string(result.Level), fmt.Sprintf("Score: %d", result.Score)))
+	fmt.Println(cli.Risk(string(result.Level), fmt.Sprintf("Findings: %d", result.FindingCount)))
+	fmt.Println()
+	fmt.Println(cli.Heading("Reasons:"))
 	if len(result.Findings) == 0 {
-		fmt.Println("  ✓ No suspicious findings detected")
+		fmt.Println(cli.Success("  ✓ No suspicious findings detected"))
 	} else {
 		for _, finding := range result.Findings {
 			if finding.Name == "" {
-				fmt.Printf("  ⚠ %-8s %s\n", finding.Severity, finding.Description)
+				fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("  ⚠ %-8s %s", finding.Severity, finding.Description)))
 				continue
 			}
-			fmt.Printf("  ⚠ %-8s %s: %s\n", finding.Severity, finding.Name, finding.Description)
+			fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("  ⚠ %-8s %s: %s", finding.Severity, finding.Name, finding.Description)))
 		}
 	}
-	fmt.Printf("\nRisk: %s\n", result.Level)
+	fmt.Printf("\n%s\n", cli.Risk(string(result.Level), fmt.Sprintf("Risk: %s", result.Level)))
 
 	decision, reason, policyErr := policy.Evaluate(result)
 	decisionStatus := toAuditDecision(decision)
 	fmt.Println()
-	fmt.Println("Security Policy")
-	fmt.Println("---------------")
-	fmt.Printf("Decision: %s\n", decisionStatus)
+	fmt.Println(cli.Heading("Security Policy"))
+	fmt.Println(cli.Muted("---------------"))
+	fmt.Printf("Decision: %s\n", cli.Decision(string(decisionStatus), string(decisionStatus)))
 	if reason != "" {
 		fmt.Printf("Reason: %s\n", reason)
 	}
@@ -336,7 +338,7 @@ func (n NPM) Install(args []string) error {
 		fmt.Println()
 		fmt.Println("Audit")
 		fmt.Println("-----")
-		fmt.Println("✓ Security event recorded")
+		fmt.Println(cli.Success("✓ Security event recorded"))
 		return fmt.Errorf("security policy evaluation failed: %w", policyErr)
 	}
 	if decision == policy.Block {
@@ -355,7 +357,7 @@ func (n NPM) Install(args []string) error {
 		fmt.Println()
 		fmt.Println("Audit")
 		fmt.Println("-----")
-		fmt.Println("✓ Security event recorded")
+		fmt.Println(cli.Success("✓ Security event recorded"))
 		return fmt.Errorf("security policy blocks installation: %s", reason)
 	}
 

@@ -215,6 +215,26 @@ func TestReadRecentRespectsDefaultLimit(t *testing.T) {
 	}
 }
 
+func TestReadRecentUsesTenEventDefaultLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	var lines []string
+	for i := 0; i < 15; i++ {
+		timestamp := time.Date(2026, 9, 1, 0, i, 0, 0, time.UTC).Format(time.RFC3339)
+		lines = append(lines, fmt.Sprintf(`{"timestamp":"%s","packages":["pkg-%d"],"decision":"ALLOW"}`, timestamp, i))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	events, err := ReadRecentAt(path, 0)
+	if err != nil {
+		t.Fatalf("read recent events: %v", err)
+	}
+	if len(events) != 10 {
+		t.Fatalf("expected 10 default events, got %d", len(events))
+	}
+}
+
 func TestReadRecentEmptyAndMissingAuditLogs(t *testing.T) {
 	emptyFile := filepath.Join(t.TempDir(), "empty.jsonl")
 	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
