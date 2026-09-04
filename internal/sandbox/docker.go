@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -143,11 +144,10 @@ func buildDockerArgs(config Config, command ...string) []string {
 	if workspace == "" {
 		workspace = "/saferun/workspace"
 	}
-	user := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 	if config.PidsLimit <= 0 {
 		config.PidsLimit = 128
 	}
-	return []string{
+	args := []string{
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges",
 		"--memory=" + config.Memory,
@@ -161,12 +161,16 @@ func buildDockerArgs(config Config, command ...string) []string {
 		"--env=TMPDIR=/tmp",
 		"--volume=" + workspace + ":/saferun/workspace",
 		"--workdir=/saferun/workspace",
-		"--user=" + user,
 		"--entrypoint=/bin/sh",
 		config.Image,
 		"-c",
 		strings.Join(command, " "),
 	}
+	if runtime.GOOS != "windows" {
+		user := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+		args = append(args[:len(args)-4], append([]string{"--user=" + user}, args[len(args)-4:]...)...)
+	}
+	return args
 }
 
 func buildDockerExecArgs(containerName string, command []string) []string {

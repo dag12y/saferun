@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,10 +36,15 @@ func TestBuildDockerArgsSecurityHardening(t *testing.T) {
 		"--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
 		"--volume=/tmp/saferun-workspace:/saferun/workspace",
 		"--workdir=/saferun/workspace",
-		"--user=" + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 		"--entrypoint=/bin/sh",
 		"saferun-node:dev",
 	} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("docker args missing %q in %v", want, args)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		want := "--user=" + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
 		if !strings.Contains(combined, want) {
 			t.Fatalf("docker args missing %q in %v", want, args)
 		}
@@ -81,6 +87,7 @@ func TestRunNormalCommandSucceeds(t *testing.T) {
 		PidsLimit: 128,
 		Timeout:   30 * time.Second,
 	}
+	containersBefore := safeRunContainers(t)
 
 	changes, _, _, err := Run(config, "sh", "-c", "echo ready > /saferun/workspace/test.txt")
 	if err != nil {
@@ -89,7 +96,7 @@ func TestRunNormalCommandSucceeds(t *testing.T) {
 	if len(changes.Created) == 0 {
 		t.Fatal("expected created file changes from successful command")
 	}
-	assertNoSafeRunContainers(t)
+	assertNoNewSafeRunContainers(t, containersBefore)
 }
 
 func TestRunTimeout(t *testing.T) {
@@ -138,6 +145,7 @@ func TestRunCreatesIsolatedWorkspaceAndCleansUp(t *testing.T) {
 		PidsLimit: 128,
 		Timeout:   5 * time.Minute,
 	}
+	containersBefore := safeRunContainers(t)
 
 	changes, _, _, err := Run(config, "sh", "-c", "echo ready > /saferun/workspace/test.txt && echo hello > /saferun/workspace/hello.txt")
 	if err != nil {
@@ -162,16 +170,27 @@ func TestRunCreatesIsolatedWorkspaceAndCleansUp(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "run-")); err == nil {
 		t.Fatal("expected sandbox temp directory to be removed")
 	}
-	assertNoSafeRunContainers(t)
+	assertNoNewSafeRunContainers(t, containersBefore)
 }
 
-func assertNoSafeRunContainers(t *testing.T) {
+func safeRunContainers(t *testing.T) map[string]struct{} {
 	t.Helper()
 	out, err := exec.Command("docker", "ps", "-a", "--filter", "name=saferun-", "--format", "{{.Names}} ").CombinedOutput()
 	if err != nil {
 		t.Fatalf("list saferun containers: %v: %s", err, out)
 	}
-	if strings.TrimSpace(string(out)) != "" {
-		t.Fatalf("expected no leftover saferun containers, got: %q", strings.TrimSpace(string(out)))
+	containers := make(map[string]struct{})
+	for _, name := range strings.Fields(string(out)) {
+		containers[name] = struct{}{}
+	}
+	return containers
+}
+
+func assertNoNewSafeRunContainers(t *testing.T, before map[string]struct{}) {
+	t.Helper()
+	for name := range safeRunContainers(t) {
+		if _, existed := before[name]; !existed {
+			t.Fatalf("expected no new leftover saferun containers, got: %q", name)
+		}
 	}
 }
