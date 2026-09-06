@@ -1,7 +1,9 @@
 package package_manager
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +12,52 @@ import (
 	"github.com/dag12y/saferun/internal/registry"
 	"github.com/dag12y/saferun/internal/sandbox"
 )
+
+func TestNPMInstallJSONOutputIsMachineReadable(t *testing.T) {
+	manager := NPM{
+		JSON:    true,
+		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		ResolveFunc: func(name string) (registry.PackageInfo, error) {
+			return registry.PackageInfo{Name: name, Version: "4.17.0"}, nil
+		},
+		DownloadFunc: func(registry.PackageInfo) (string, error) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"lodash","version":"4.17.0"}`), 0o600); err != nil {
+				return "", err
+			}
+			return dir, nil
+		},
+		SandboxRunner: func(sandbox.Config, ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error) {
+			return analyzer.FileChanges{}, nil, nil, nil
+		},
+	}
+
+	originalStdout := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = write
+	installErr := manager.Install([]string{"lodash"})
+	_ = write.Close()
+	os.Stdout = originalStdout
+	if installErr != nil {
+		t.Fatalf("Install returned unexpected error: %v", installErr)
+	}
+	data, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(data, &response); err != nil {
+		t.Fatalf("expected JSON output, got %q: %v", data, err)
+	}
+	for _, field := range []string{"package", "version", "risk", "analysis", "policy", "timestamp"} {
+		if _, ok := response[field]; !ok {
+			t.Errorf("missing report field %q", field)
+		}
+	}
+}
 
 type fakeRegistry struct{}
 

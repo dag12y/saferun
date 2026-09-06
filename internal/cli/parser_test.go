@@ -41,6 +41,19 @@ func TestParseUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestParseJSONFlag(t *testing.T) {
+	command, err := Parse([]string{"npm", "install", "lodash", "--json"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !command.JSON {
+		t.Fatal("expected JSON output to be enabled")
+	}
+	if strings.Join(command.Arguments, " ") != "lodash" {
+		t.Fatalf("expected --json to be removed from npm arguments, got %v", command.Arguments)
+	}
+}
+
 func TestHelpText(t *testing.T) {
 	help := HelpText("v1.0.3-test")
 	for _, expected := range []string{"SafeRun v1.0.3-test", "Usage:", "--help", "setup", "npm", "audit", "version"} {

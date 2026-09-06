@@ -1,3 +1,6 @@
+[![Release](https://img.shields.io/github/v/release/dag12y/saferun)](...)
+[![Go](https://img.shields.io/badge/go-1.22+-blue)](...)
+[![License](https://img.shields.io/github/license/dag12y/saferun)](...)
 # SafeRun
 
 SafeRun is a secure package installation sandbox for developers who want to inspect npm packages before they run in a project. It addresses software supply chain attacks by analyzing package metadata, lifecycle scripts, files, processes, and network activity inside an isolated Docker environment before installation is approved.
@@ -87,6 +90,38 @@ Higher-risk results include the relevant findings and can end with a `BLOCK` dec
 ```bash
 saferun audit
 ```
+
+## JSON Output
+
+Use `--json` when a script or CI/CD pipeline needs to consume the security result without terminal formatting or progress output:
+
+```bash
+saferun npm install express --json
+```
+
+SafeRun writes one JSON report to standard output. It includes the package and version, risk level and findings, behavior/process/network/file analysis, policy decision, and timestamp:
+
+```json
+{
+  "package": "lodash",
+  "version": "4.18.1",
+  "risk": {
+    "level": "LOW",
+    "score": 0,
+    "findings": []
+  },
+  "analysis": {
+    "behavior": {"suspicious": false},
+    "processes": [],
+    "network": ["registry.npmjs.org:443"],
+    "files": []
+  },
+  "policy": {"decision": "ALLOW"},
+  "timestamp": "2026-09-05T00:00:00Z"
+}
+```
+
+Errors in JSON mode use the same machine-readable output, with `error` and `message` fields. CI/CD systems can parse standard output as JSON and use the command exit status to fail blocked or unsuccessful checks.
 
 Example audit output:
 

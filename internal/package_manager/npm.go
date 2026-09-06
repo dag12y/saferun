@@ -15,6 +15,7 @@ import (
 	"github.com/dag12y/saferun/internal/policy"
 	"github.com/dag12y/saferun/internal/prompt"
 	"github.com/dag12y/saferun/internal/registry"
+	"github.com/dag12y/saferun/internal/report"
 	"github.com/dag12y/saferun/internal/risk"
 	"github.com/dag12y/saferun/internal/sandbox"
 	"github.com/dag12y/saferun/internal/setup"
@@ -30,6 +31,7 @@ type NPM struct {
 	SandboxRunner func(sandbox.Config, ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error)
 	RealInstaller func([]string) error
 	Prompt        func(string) bool
+	JSON          bool
 }
 
 func DefaultNPMInstaller(args []string) error {
@@ -55,7 +57,38 @@ type packageReport struct {
 	Source       string
 }
 
+type outputFormatter struct {
+	io.Writer
+}
+
+func (f outputFormatter) Println(args ...any) (int, error) {
+	return fmt.Fprintln(f.Writer, args...)
+}
+
+func (f outputFormatter) Printf(format string, args ...any) (int, error) {
+	return fmt.Fprintf(f.Writer, format, args...)
+}
+
+func (f outputFormatter) Errorf(format string, args ...any) error {
+	return fmt.Errorf(format, args...)
+}
+
+func (f outputFormatter) Sprintf(format string, args ...any) string {
+	return fmt.Sprintf(format, args...)
+}
+
+func (f outputFormatter) Print(args ...any) (int, error) {
+	return fmt.Fprint(f.Writer, args...)
+}
+
 func (n NPM) Install(args []string) error {
+	output := io.Writer(os.Stdout)
+	if n.JSON {
+		output = io.Discard
+	}
+	fmt := outputFormatter{Writer: output}
+	n.Sandbox.Output = output
+
 	if n.Sandbox.Image == "" {
 		n.Sandbox.Image = sandbox.DefaultImage
 	}
@@ -315,6 +348,28 @@ func (n NPM) Install(args []string) error {
 
 	decision, reason, policyErr := policy.Evaluate(result)
 	decisionStatus := toAuditDecision(decision)
+	if n.JSON {
+		securityReport := report.NewSecurityReport(
+			packageReports[0].Package.Name,
+			packageReports[0].Package.Version,
+			result,
+			behaviorFindings,
+			processFindings,
+			expectedConnections,
+			packageReports[0].FileFindings,
+			decision,
+		)
+		if policyErr != nil {
+			return fmt.Errorf("security policy evaluation failed: %w", policyErr)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(securityReport); err != nil {
+			return fmt.Errorf("encode security report: %w", err)
+		}
+		if decision != policy.Allow {
+			return fmt.Errorf("security policy blocks installation: %s", reason)
+		}
+		return nil
+	}
 	fmt.Println()
 	fmt.Println(cli.Heading("Security Policy"))
 	fmt.Println(cli.Muted("---------------"))

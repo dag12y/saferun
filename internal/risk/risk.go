@@ -21,9 +21,9 @@ var scoreBySeverity = map[Level]int{
 var thresholdOrder = []Level{Low, Medium, High, Critical}
 
 type Finding struct {
-	Name        string
-	Description string
-	Severity    Level
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Severity    Level  `json:"severity"`
 }
 
 type Report struct {

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/dag12y/saferun/internal/audit"
 	"github.com/dag12y/saferun/internal/cli"
@@ -16,6 +18,10 @@ import (
 func main() {
 	command, err := cli.Parse(os.Args[1:])
 	if err != nil {
+		if command.JSON {
+			writeJSONError(err)
+			os.Exit(1)
+		}
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
@@ -29,9 +35,11 @@ func main() {
 		return
 	}
 
-	fmt.Println("SafeRun")
-	fmt.Println("Secure package installation sandbox")
-	fmt.Println()
+	if !command.JSON {
+		fmt.Println("SafeRun")
+		fmt.Println("Secure package installation sandbox")
+		fmt.Println()
+	}
 
 	config := sandbox.DefaultConfig()
 	dockerCtx, dockerCancel := setup.DockerTimeoutContext()
@@ -135,6 +143,10 @@ func main() {
 		return
 	case "npm":
 		if command.Operation != "install" {
+			if command.JSON {
+				writeJSONError(fmt.Errorf("unsupported npm operation: %s", command.Operation))
+				os.Exit(1)
+			}
 			fmt.Fprintf(os.Stderr, "Error: unsupported npm operation: %s\n\nUsage:\n  saferun npm install <package> [options]\n", command.Operation)
 			os.Exit(1)
 		}
@@ -144,14 +156,26 @@ func main() {
 			Registry: registry.NPMRegistry{
 				BaseURL: "https://registry.npmjs.org",
 			},
+			JSON: command.JSON,
 		}
 
 		if err := manager.Install(command.Arguments); err != nil {
+			if command.JSON {
+				if strings.HasPrefix(err.Error(), "security policy blocks installation:") {
+					os.Exit(1)
+				}
+				writeJSONError(err)
+				os.Exit(1)
+			}
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
 		}
 
 	default:
+		if command.JSON {
+			writeJSONError(fmt.Errorf("unsupported package manager: %s", command.PackageManager))
+			os.Exit(1)
+		}
 		fmt.Fprintf(
 			os.Stderr,
 			"Error: unsupported package manager: %s\n\nUsage:\n  saferun npm install <package> [options]\n",
@@ -159,4 +183,17 @@ func main() {
 		)
 		os.Exit(1)
 	}
+}
+
+func writeJSONError(err error) {
+	category := "saferun operation failed"
+	if strings.Contains(err.Error(), "failed to resolve package") {
+		category = "package resolution failed"
+	} else if strings.Contains(err.Error(), "failed to download package") {
+		category = "package download failed"
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}{Error: category, Message: err.Error()})
 }

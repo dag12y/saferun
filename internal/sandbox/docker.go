@@ -86,7 +86,11 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 		_ = exec.Command("docker", "rm", "-f", containerName).Run()
 	}()
 
-	fmt.Println("Sandbox started:", containerName)
+	reportOutput := config.Output
+	if reportOutput == nil {
+		reportOutput = os.Stdout
+	}
+	fmt.Fprintln(reportOutput, "Sandbox started:", containerName)
 
 	monitorCmd := exec.Command(
 		"docker",
@@ -105,7 +109,7 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 	installArgs := buildDockerExecArgs(containerName, command)
 	installCmd := exec.CommandContext(installCtx, "docker", installArgs...)
 	installOutput, err := installCmd.CombinedOutput()
-	fmt.Print(string(installOutput))
+	fmt.Fprint(reportOutput, string(installOutput))
 	if err != nil {
 		if installCtx.Err() == context.DeadlineExceeded {
 			return analyzer.FileChanges{}, nil, nil, fmt.Errorf("sandbox timed out after %s", config.Timeout)

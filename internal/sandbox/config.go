@@ -1,6 +1,10 @@
 package sandbox
 
-import "time"
+import (
+	"io"
+	"os"
+	"time"
+)
 
 const (
 	DefaultRegistry  = "docker.io"
@@ -17,6 +21,7 @@ type Config struct {
 	Workspace string
 	PidsLimit int
 	Timeout   time.Duration
+	Output    io.Writer
 }
 
 func DefaultConfig() Config {
@@ -28,5 +33,6 @@ func DefaultConfig() Config {
 		Workspace: "/tmp/saferun-workspace",
 		PidsLimit: 128,
 		Timeout:   5 * time.Minute,
+		Output:    os.Stdout,
 	}
 }
