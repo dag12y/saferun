@@ -22,6 +22,10 @@ type backupEntry struct {
 }
 
 func createProjectBackup(projectDir string, packageSpecs []string) (*ProjectBackup, error) {
+	return createProjectBackupMode(projectDir, packageSpecs, false)
+}
+
+func createProjectBackupMode(projectDir string, packageSpecs []string, wholeNodeModules bool) (*ProjectBackup, error) {
 	absProjectDir, err := filepath.Abs(projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve project root: %w", err)
@@ -37,7 +41,7 @@ func createProjectBackup(projectDir string, packageSpecs []string) (*ProjectBack
 		BackupDir:  backupDir,
 	}
 
-	paths := collectBackupTargets(absProjectDir, packageSpecs)
+	paths := collectBackupTargetsMode(absProjectDir, packageSpecs, wholeNodeModules)
 	for _, target := range paths {
 		entry, err := capturePath(absProjectDir, backupDir, target)
 		if err != nil {
@@ -50,6 +54,10 @@ func createProjectBackup(projectDir string, packageSpecs []string) (*ProjectBack
 }
 
 func collectBackupTargets(projectDir string, packageSpecs []string) []string {
+	return collectBackupTargetsMode(projectDir, packageSpecs, false)
+}
+
+func collectBackupTargetsMode(projectDir string, packageSpecs []string, wholeNodeModules bool) []string {
 	seen := map[string]struct{}{}
 	result := make([]string, 0, len(packageSpecs)+4)
 	addPath := func(path string) {
@@ -68,6 +76,9 @@ func collectBackupTargets(projectDir string, packageSpecs []string) []string {
 	}
 
 	addPath(filepath.Join(projectDir, "package.json"))
+	if wholeNodeModules {
+		addPath(filepath.Join(projectDir, "node_modules"))
+	}
 	if lockfilePath := filepath.Join(projectDir, "package-lock.json"); fileExists(lockfilePath) {
 		addPath(lockfilePath)
 	}
@@ -238,14 +249,14 @@ func copyDirectory(src, dst string) error {
 		if err != nil {
 			return err
 		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to copy symlink %q", path)
+		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
 		}
 		target := filepath.Join(dst, rel)
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing to copy symlink %q", path)
-		}
 		if info.IsDir() {
 			return os.MkdirAll(target, info.Mode())
 		}

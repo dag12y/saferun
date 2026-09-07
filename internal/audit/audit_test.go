@@ -33,6 +33,19 @@ func TestEventSerializesToJSON(t *testing.T) {
 	}
 }
 
+func TestProjectEventSerializesScopeMetadata(t *testing.T) {
+	event := Event{Operation: "install", Scope: "project", Project: "my-app", PackagesAnalyzed: 3, Packages: []string{"lodash", "express"}}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal project event: %v", err)
+	}
+	for _, field := range []string{"\"operation\":\"install\"", "\"scope\":\"project\"", "\"project\":\"my-app\"", "\"packages_analyzed\":3"} {
+		if !strings.Contains(string(data), field) {
+			t.Fatalf("serialized project event missing %s: %s", field, data)
+		}
+	}
+}
+
 func TestMultipleEventsAppendCorrectly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	logger := NewLoggerAt(path)

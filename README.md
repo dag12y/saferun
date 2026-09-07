@@ -1,6 +1,7 @@
 [![Release](https://img.shields.io/github/v/release/dag12y/saferun)](...)
 [![Go](https://img.shields.io/badge/go-1.22+-blue)](...)
 [![License](https://img.shields.io/github/license/dag12y/saferun)](...)
+
 # SafeRun
 
 SafeRun is a secure package installation sandbox for developers who want to inspect npm packages before they run in a project. It addresses software supply chain attacks by analyzing package metadata, lifecycle scripts, files, processes, and network activity inside an isolated Docker environment before installation is approved.
@@ -64,6 +65,20 @@ saferun audit --clear
 
 `saferun setup` checks Docker, verifies the sandbox image, and downloads it when necessary. The npm command analyzes the requested package before asking for approval to install it in the current project.
 
+## Installing Project Dependencies
+
+From a Node.js project, SafeRun can analyze the complete dependency set before installing it:
+
+```bash
+git clone https://github.com/example/project.git
+cd project
+saferun npm install
+```
+
+SafeRun reads `package.json`, uses npm's resolver in a temporary scripts-disabled workspace when a lockfile is absent, analyzes the resolved lockfile packages and the full install inside Docker, produces an aggregate report, applies the security policy, and only then runs host-side `npm install` from the project directory. Existing `package-lock.json` files are used for deterministic package versions, and the project is backed up before installation.
+
+Project mode currently requires npm lockfile version 2 or 3 for resolved packages and rejects dependency sources SafeRun cannot verify safely, including `file:`, `workspace:`, git, GitHub, tarball URL, and npm alias specifications. Symlinked project inputs are also rejected. These limitations are intentional: unsupported dependencies are blocked instead of being silently skipped.
+
 ## CLI Output
 
 A package analysis includes a security report, risk score, and policy decision:
@@ -111,12 +126,12 @@ SafeRun writes one JSON report to standard output. It includes the package and v
     "findings": []
   },
   "analysis": {
-    "behavior": {"suspicious": false},
+    "behavior": { "suspicious": false },
     "processes": [],
     "network": ["registry.npmjs.org:443"],
     "files": []
   },
-  "policy": {"decision": "ALLOW"},
+  "policy": { "decision": "ALLOW" },
   "timestamp": "2026-09-05T00:00:00Z"
 }
 ```

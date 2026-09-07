@@ -54,6 +54,19 @@ func TestParseJSONFlag(t *testing.T) {
 	}
 }
 
+func TestParseProjectInstall(t *testing.T) {
+	command, err := Parse([]string{"npm", "install", "--json"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if command.PackageManager != "npm" || command.Operation != "install" || !command.JSON {
+		t.Fatalf("unexpected project command: %#v", command)
+	}
+	if len(command.Arguments) != 0 {
+		t.Fatalf("expected no package arguments, got %v", command.Arguments)
+	}
+}
+
 func TestHelpText(t *testing.T) {
 	help := HelpText("v1.0.3-test")
 	for _, expected := range []string{"SafeRun v1.0.3-test", "Usage:", "--help", "setup", "npm", "audit", "version"} {

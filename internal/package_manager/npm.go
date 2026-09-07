@@ -35,7 +35,14 @@ type NPM struct {
 }
 
 func DefaultNPMInstaller(args []string) error {
+	return defaultNPMInstallerInDir("", args)
+}
+
+func defaultNPMInstallerInDir(projectDir string, args []string) error {
 	cmd := exec.Command("npm", args...)
+	if projectDir != "" {
+		cmd.Dir = projectDir
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -92,6 +99,72 @@ func (n NPM) Install(args []string) error {
 	if n.Sandbox.Image == "" {
 		n.Sandbox.Image = sandbox.DefaultImage
 	}
+	parsed, err := parseInstallArgsAllowEmpty(args)
+	if err != nil {
+		return err
+	}
+	projectMode := len(parsed.Packages) == 0
+	projectDir := n.ProjectDir
+	if projectMode && projectDir == "" {
+		projectDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("determine current project directory: %w", err)
+		}
+		if err := validateProjectFlags(parsed.Flags); err != nil {
+			return err
+		}
+	}
+	packageArgs := append([]string(nil), parsed.Packages...)
+	installArgs := append([]string(nil), args...)
+	analysisArgs := append([]string(nil), packageArgs...)
+	if projectMode {
+		manifestPath := filepath.Join(projectDir, "package.json")
+		if _, statErr := os.Stat(manifestPath); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return fmt.Errorf("package.json not found in the current directory")
+			}
+			return fmt.Errorf("inspect package.json: %w", statErr)
+		}
+		resolution, resolveErr := resolveProject(projectDir, parsed.Flags)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		packageArgs = make([]string, 0, len(resolution.Dependencies))
+		for _, dependency := range resolution.Dependencies {
+			packageArgs = append(packageArgs, dependency.Name)
+		}
+		analysisArgs = make([]string, 0, len(resolution.Packages))
+		resolvedPackages := make(map[string]registry.PackageInfo, len(resolution.Packages))
+		for _, pkg := range resolution.Packages {
+			spec := packageSpec(pkg.Name, pkg.Version)
+			if _, exists := resolvedPackages[spec]; exists {
+				continue
+			}
+			resolvedPackages[spec] = pkg
+			analysisArgs = append(analysisArgs, spec)
+		}
+		if len(resolution.Packages) == 0 && len(resolution.Dependencies) > 0 {
+			return fmt.Errorf("package-lock.json contains no analyzable packages")
+		}
+		originalResolve := n.ResolveFunc
+		originalDownload := n.DownloadFunc
+		n.ResolveFunc = func(spec string) (registry.PackageInfo, error) {
+			if pkg, ok := resolvedPackages[spec]; ok {
+				return pkg, nil
+			}
+			if originalResolve != nil {
+				return originalResolve(spec)
+			}
+			return registry.PackageInfo{}, fmt.Errorf("package %s was not present in the resolved dependency graph", spec)
+		}
+		n.DownloadFunc = func(pkg registry.PackageInfo) (string, error) {
+			if originalDownload != nil {
+				return originalDownload(pkg)
+			}
+			return n.Registry.Download(pkg)
+		}
+		n.Sandbox.ProjectDir = projectDir
+	}
 	if n.SandboxRunner == nil {
 		if _, err := exec.LookPath("docker"); err == nil {
 			imgCtx, cancel := setup.DockerTimeoutContext()
@@ -108,21 +181,10 @@ func (n NPM) Install(args []string) error {
 			}
 		}
 	}
-
-	parsed, err := ParseInstallArgs(args)
-	if err != nil {
-		return err
-	}
-	if len(parsed.Packages) == 0 {
-		return fmt.Errorf("usage: saferun npm install <package> [options]")
-	}
-
-	packageArgs := append([]string(nil), parsed.Packages...)
-	installArgs := append([]string(nil), args...)
 	packageReports := make([]packageReport, 0, len(packageArgs))
 	allFindings := make([]risk.Finding, 0)
 
-	for _, packageName := range packageArgs {
+	for _, packageName := range analysisArgs {
 		var report packageReport
 
 		if isLocalPackagePath(packageName) {
@@ -250,6 +312,15 @@ func (n NPM) Install(args []string) error {
 
 	result := risk.Analyze(allFindings)
 	logger := n.auditLogger()
+	auditContext := func(event audit.Event) audit.Event {
+		if projectMode {
+			event.Operation = "install"
+			event.Scope = "project"
+			event.Project = filepath.Base(projectDir)
+			event.PackagesAnalyzed = len(packageReports)
+		}
+		return event
+	}
 
 	fmt.Println()
 	fmt.Println(cli.Heading("Behavior Analysis"))
@@ -349,6 +420,23 @@ func (n NPM) Install(args []string) error {
 	decision, reason, policyErr := policy.Evaluate(result)
 	decisionStatus := toAuditDecision(decision)
 	if n.JSON {
+		if projectMode {
+			projectPackages := make([]report.ProjectPackageInput, 0, len(packageReports))
+			for _, pkg := range packageReports {
+				projectPackages = append(projectPackages, report.ProjectPackageInput{Name: pkg.Package.Name, Version: pkg.Package.Version, Findings: pkg.Findings})
+			}
+			projectReport := report.NewProjectSecurityReport(filepath.Base(projectDir), result, projectPackages, behaviorFindings, processFindings, expectedConnections, decision)
+			if policyErr != nil {
+				return fmt.Errorf("security policy evaluation failed: %w", policyErr)
+			}
+			if err := json.NewEncoder(os.Stdout).Encode(projectReport); err != nil {
+				return fmt.Errorf("encode security report: %w", err)
+			}
+			if decision != policy.Allow {
+				return fmt.Errorf("security policy blocks installation: %s", reason)
+			}
+			return nil
+		}
 		securityReport := report.NewSecurityReport(
 			packageReports[0].Package.Name,
 			packageReports[0].Package.Version,
@@ -379,7 +467,7 @@ func (n NPM) Install(args []string) error {
 	}
 
 	if policyErr != nil {
-		loggerRecord(logger, audit.Event{
+		loggerRecord(logger, auditContext(audit.Event{
 			Packages:     append([]string(nil), packageArgs...),
 			Risk:         string(result.Level),
 			Score:        result.Score,
@@ -389,7 +477,7 @@ func (n NPM) Install(args []string) error {
 			Installation: audit.InstallationNotRun,
 			Verification: audit.VerificationNotRun,
 			Reason:       policyErr.Error(),
-		})
+		}))
 		fmt.Println()
 		fmt.Println("Audit")
 		fmt.Println("-----")
@@ -408,7 +496,7 @@ func (n NPM) Install(args []string) error {
 			Verification: audit.VerificationNotRun,
 			Reason:       reason,
 		}
-		loggerRecord(logger, auditEvent)
+		loggerRecord(logger, auditContext(auditEvent))
 		fmt.Println()
 		fmt.Println("Audit")
 		fmt.Println("-----")
@@ -421,7 +509,19 @@ func (n NPM) Install(args []string) error {
 		confirm = prompt.Confirm
 	}
 	fmt.Println()
-	if len(packageReports) > 1 {
+	if projectMode {
+		if !confirm("Install project dependencies?") {
+			fmt.Println("Installation cancelled.")
+			auditEvent := audit.Event{
+				Packages: append([]string(nil), packageArgs...), Risk: string(result.Level), Score: result.Score,
+				FindingCount: result.FindingCount, Decision: decisionStatus, Approval: audit.ApprovalDeclined,
+				Installation: audit.InstallationNotRun, Verification: audit.VerificationNotRun,
+				Reason: "User declined installation.",
+			}
+			loggerRecord(logger, auditContext(auditEvent))
+			return nil
+		}
+	} else if len(packageReports) > 1 {
 		if !confirm(fmt.Sprintf("Install %d packages in your project?", len(packageReports))) {
 			fmt.Println("Installation cancelled.")
 			auditEvent := audit.Event{
@@ -435,7 +535,7 @@ func (n NPM) Install(args []string) error {
 				Verification: audit.VerificationNotRun,
 				Reason:       "User declined installation.",
 			}
-			loggerRecord(logger, auditEvent)
+			loggerRecord(logger, auditContext(auditEvent))
 			fmt.Println()
 			fmt.Println("Audit")
 			fmt.Println("-----")
@@ -456,7 +556,7 @@ func (n NPM) Install(args []string) error {
 				Verification: audit.VerificationNotRun,
 				Reason:       "User declined installation.",
 			}
-			loggerRecord(logger, auditEvent)
+			loggerRecord(logger, auditContext(auditEvent))
 			fmt.Println()
 			fmt.Println("Audit")
 			fmt.Println("-----")
@@ -466,16 +566,21 @@ func (n NPM) Install(args []string) error {
 	}
 
 	fmt.Println()
-	if len(packageReports) > 1 {
+	if projectMode {
+		fmt.Println("Installing project dependencies...")
+	} else if len(packageReports) > 1 {
 		fmt.Printf("Installing %d packages in your project...\n", len(packageReports))
 	} else {
 		fmt.Printf("Installing %s@%s in your project...\n", packageReports[0].Package.Name, packageReports[0].Package.Version)
 	}
 	installer := n.RealInstaller
 	if installer == nil {
-		installer = DefaultNPMInstaller
+		if projectMode {
+			installer = func(installArgs []string) error { return defaultNPMInstallerInDir(projectDir, installArgs) }
+		} else {
+			installer = DefaultNPMInstaller
+		}
 	}
-	projectDir := n.ProjectDir
 	if projectDir == "" {
 		projectDir, err = os.Getwd()
 		if err != nil {
@@ -491,7 +596,7 @@ func (n NPM) Install(args []string) error {
 				Rollback:     audit.RollbackNotRequired,
 				Reason:       fmt.Sprintf("verification setup failed: %v", err),
 			}
-			loggerRecord(logger, auditEvent)
+			loggerRecord(logger, auditContext(auditEvent))
 			fmt.Println()
 			fmt.Println("Audit")
 			fmt.Println("-----")
@@ -500,7 +605,7 @@ func (n NPM) Install(args []string) error {
 		}
 	}
 
-	backup, backupErr := createProjectBackup(projectDir, packageArgs)
+	backup, backupErr := createProjectBackupMode(projectDir, packageArgs, projectMode)
 	if backupErr != nil {
 		auditEvent := audit.Event{
 			Packages:     append([]string(nil), packageArgs...),
@@ -514,7 +619,7 @@ func (n NPM) Install(args []string) error {
 			Rollback:     audit.RollbackNotRequired,
 			Reason:       backupErr.Error(),
 		}
-		loggerRecord(logger, auditEvent)
+		loggerRecord(logger, auditContext(auditEvent))
 		fmt.Println()
 		fmt.Println("Backup failed")
 		fmt.Println("Audit")
@@ -540,7 +645,7 @@ func (n NPM) Install(args []string) error {
 		if rollbackErr != nil {
 			auditEvent.Rollback = audit.RollbackFailed
 			auditEvent.Reason = fmt.Sprintf("%s; rollback failed: %v", err.Error(), rollbackErr)
-			loggerRecord(logger, auditEvent)
+			loggerRecord(logger, auditContext(auditEvent))
 			fmt.Println()
 			fmt.Println("Rolling back installation...")
 			fmt.Println("✗ Rollback failed.")
@@ -553,7 +658,7 @@ func (n NPM) Install(args []string) error {
 			fmt.Println("✓ Security event recorded")
 			return fmt.Errorf("real npm installation failed: %w; rollback failed: %v", err, rollbackErr)
 		}
-		loggerRecord(logger, auditEvent)
+		loggerRecord(logger, auditContext(auditEvent))
 		fmt.Println()
 		fmt.Println("Rolling back installation...")
 		fmt.Println("✓ Project restored successfully.")
@@ -609,7 +714,7 @@ func (n NPM) Install(args []string) error {
 		if rollbackErr != nil {
 			auditEvent.Rollback = audit.RollbackFailed
 			auditEvent.Reason = fmt.Sprintf("%s; rollback failed: %v", verifyErr.Error(), rollbackErr)
-			loggerRecord(logger, auditEvent)
+			loggerRecord(logger, auditContext(auditEvent))
 			fmt.Println()
 			fmt.Println("Rolling back installation...")
 			fmt.Println("✗ Rollback failed.")
@@ -622,7 +727,7 @@ func (n NPM) Install(args []string) error {
 			fmt.Println("✓ Security event recorded")
 			return fmt.Errorf("installation verification failed: %w; rollback failed: %v", verifyErr, rollbackErr)
 		}
-		loggerRecord(logger, auditEvent)
+		loggerRecord(logger, auditContext(auditEvent))
 		fmt.Println()
 		fmt.Println("Rolling back installation...")
 		fmt.Println("✓ Project restored successfully.")
@@ -650,7 +755,7 @@ func (n NPM) Install(args []string) error {
 	if err := backup.Cleanup(); err != nil {
 		auditEvent.Rollback = audit.RollbackFailed
 		auditEvent.Reason = err.Error()
-		loggerRecord(logger, auditEvent)
+		loggerRecord(logger, auditContext(auditEvent))
 		fmt.Println()
 		fmt.Println("WARNING: SafeRun could not fully clean up backup artifacts.")
 		fmt.Println()
@@ -659,7 +764,7 @@ func (n NPM) Install(args []string) error {
 		fmt.Println("✓ Security event recorded")
 		return fmt.Errorf("cleanup backup: %w", err)
 	}
-	loggerRecord(logger, auditEvent)
+	loggerRecord(logger, auditContext(auditEvent))
 
 	fmt.Println()
 	fmt.Println("SafeRun completed successfully.")

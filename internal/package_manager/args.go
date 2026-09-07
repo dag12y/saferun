@@ -46,6 +46,14 @@ var booleanFlags = map[string]bool{
 }
 
 func ParseInstallArgs(args []string) (InstallArgs, error) {
+	return parseInstallArgs(args, false)
+}
+
+func parseInstallArgsAllowEmpty(args []string) (InstallArgs, error) {
+	return parseInstallArgs(args, true)
+}
+
+func parseInstallArgs(args []string, allowEmpty bool) (InstallArgs, error) {
 	parsed := InstallArgs{}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -75,7 +83,7 @@ func ParseInstallArgs(args []string) (InstallArgs, error) {
 		parsed.Packages = append(parsed.Packages, arg)
 	}
 
-	if len(parsed.Packages) == 0 {
+	if len(parsed.Packages) == 0 && !allowEmpty {
 		return InstallArgs{}, fmt.Errorf("usage: saferun npm install <package> [options]")
 	}
 

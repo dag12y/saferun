@@ -14,14 +14,15 @@ const (
 )
 
 type Config struct {
-	Image     string
-	Network   string
-	Memory    string
-	CPUs      string
-	Workspace string
-	PidsLimit int
-	Timeout   time.Duration
-	Output    io.Writer
+	Image      string
+	Network    string
+	Memory     string
+	CPUs       string
+	Workspace  string
+	PidsLimit  int
+	Timeout    time.Duration
+	Output     io.Writer
+	ProjectDir string
 }
 
 func DefaultConfig() Config {

@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha512"
+	"encoding/base64"
 	"io"
 	"os"
 	"path/filepath"
@@ -36,6 +38,17 @@ func TestExtractNPMPackageFindsPackageJSON(t *testing.T) {
 	}
 	if _, err := analyzer.AnalyzePackageJSON(manifest); err != nil {
 		t.Fatalf("analyze extracted package.json: %v", err)
+	}
+}
+
+func TestVerifyIntegrity(t *testing.T) {
+	digest := sha512.Sum512([]byte("package tarball"))
+	integrity := "sha512-" + base64.StdEncoding.EncodeToString(digest[:])
+	if err := verifyIntegrity(integrity, digest[:]); err != nil {
+		t.Fatalf("verifyIntegrity returned error: %v", err)
+	}
+	if err := verifyIntegrity(integrity, []byte("wrong")); err == nil {
+		t.Fatal("expected integrity mismatch")
 	}
 }
 

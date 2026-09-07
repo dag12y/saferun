@@ -44,17 +44,21 @@ const (
 )
 
 type Event struct {
-	Timestamp    string       `json:"timestamp"`
-	Packages     []string     `json:"packages"`
-	Risk         string       `json:"risk,omitempty"`
-	Score        int          `json:"score,omitempty"`
-	FindingCount int          `json:"findings,omitempty"`
-	Decision     Decision     `json:"decision,omitempty"`
-	Approval     Approval     `json:"approval,omitempty"`
-	Installation Installation `json:"installation,omitempty"`
-	Verification Verification `json:"verification,omitempty"`
-	Rollback     Rollback     `json:"rollback,omitempty"`
-	Reason       string       `json:"reason,omitempty"`
+	Timestamp        string       `json:"timestamp"`
+	Operation        string       `json:"operation,omitempty"`
+	Scope            string       `json:"scope,omitempty"`
+	Project          string       `json:"project,omitempty"`
+	PackagesAnalyzed int          `json:"packages_analyzed,omitempty"`
+	Packages         []string     `json:"packages"`
+	Risk             string       `json:"risk,omitempty"`
+	Score            int          `json:"score,omitempty"`
+	FindingCount     int          `json:"findings,omitempty"`
+	Decision         Decision     `json:"decision,omitempty"`
+	Approval         Approval     `json:"approval,omitempty"`
+	Installation     Installation `json:"installation,omitempty"`
+	Verification     Verification `json:"verification,omitempty"`
+	Rollback         Rollback     `json:"rollback,omitempty"`
+	Reason           string       `json:"reason,omitempty"`
 }
 
 var defaultPath = defaultAuditPath()

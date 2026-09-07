@@ -47,7 +47,7 @@ func Parse(args []string) (Command, error) {
 			return Command{PackageManager: "audit", Operation: "audit", Arguments: []string{args[1]}, JSON: jsonOutput}, nil
 		}
 		if args[0] == "npm" && args[1] == "install" {
-			return Command{JSON: jsonOutput}, fmt.Errorf("usage: saferun npm install <package> [options]\n\nExample: saferun npm install express --save")
+			return Command{PackageManager: "npm", Operation: "install", JSON: jsonOutput}, nil
 		}
 	}
 

@@ -2,7 +2,10 @@ package registry
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -95,7 +98,8 @@ func (r NPMRegistry) Download(pkg PackageInfo) (string, error) {
 		return "", fmt.Errorf("create temporary directory: %w", err)
 	}
 
-	gzipReader, err := gzip.NewReader(resp.Body)
+	hash := sha512.New()
+	gzipReader, err := gzip.NewReader(io.TeeReader(resp.Body, hash))
 	if err != nil {
 		os.RemoveAll(dir)
 		return "", fmt.Errorf("open gzip archive: %w", err)
@@ -106,8 +110,30 @@ func (r NPMRegistry) Download(pkg PackageInfo) (string, error) {
 		os.RemoveAll(dir)
 		return "", err
 	}
+	if err := verifyIntegrity(pkg.Integrity, hash.Sum(nil)); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
 
 	return dir, nil
+}
+
+func verifyIntegrity(integrity string, digest []byte) error {
+	if integrity == "" {
+		return fmt.Errorf("package integrity is missing")
+	}
+	parts := strings.SplitN(integrity, "-", 2)
+	if len(parts) != 2 || parts[0] != "sha512" {
+		return fmt.Errorf("unsupported package integrity algorithm")
+	}
+	expected, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fmt.Errorf("decode package integrity: %w", err)
+	}
+	if !bytes.Equal(expected, digest) {
+		return fmt.Errorf("package integrity verification failed")
+	}
+	return nil
 }
 
 func extractNPMPackage(source io.Reader, destination string) error {

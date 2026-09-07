@@ -190,12 +190,14 @@ type packageJSON struct {
 	Dependencies         map[string]string `json:"dependencies"`
 	DevDependencies      map[string]string `json:"devDependencies"`
 	OptionalDependencies map[string]string `json:"optionalDependencies"`
+	PeerDependencies     map[string]string `json:"peerDependencies"`
 }
 
 type projectManifest struct {
 	Dependencies         map[string]string
 	DevDependencies      map[string]string
 	OptionalDependencies map[string]string
+	PeerDependencies     map[string]string
 }
 
 func loadProjectManifest(path string) (projectManifest, error) {
@@ -213,6 +215,7 @@ func loadProjectManifest(path string) (projectManifest, error) {
 		Dependencies:         pkg.Dependencies,
 		DevDependencies:      pkg.DevDependencies,
 		OptionalDependencies: pkg.OptionalDependencies,
+		PeerDependencies:     pkg.PeerDependencies,
 	}, nil
 }
 
@@ -227,13 +230,16 @@ func (m projectManifest) HasDependency(section, name string) bool {
 	case "optionalDependencies":
 		_, ok := m.OptionalDependencies[name]
 		return ok
+	case "peerDependencies":
+		_, ok := m.PeerDependencies[name]
+		return ok
 	default:
 		return false
 	}
 }
 
 func (m projectManifest) isEmpty() bool {
-	return len(m.Dependencies) == 0 && len(m.DevDependencies) == 0 && len(m.OptionalDependencies) == 0
+	return len(m.Dependencies) == 0 && len(m.DevDependencies) == 0 && len(m.OptionalDependencies) == 0 && len(m.PeerDependencies) == 0
 }
 
 func readPackageJSON(path string) (packageJSON, error) {

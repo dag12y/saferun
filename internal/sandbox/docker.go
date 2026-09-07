@@ -52,6 +52,11 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 		)
 	}
 	config.Workspace = workspace
+	if config.ProjectDir != "" {
+		if err := copyProjectDirectory(config.ProjectDir, workspace); err != nil {
+			return analyzer.FileChanges{}, nil, nil, fmt.Errorf("stage project in sandbox: %w", err)
+		}
+	}
 
 	command, err = prepareLocalPackageInSandbox(workspace, command)
 	if err != nil {
@@ -232,6 +237,9 @@ func copyDirectory(src, dst string) error {
 		if err != nil {
 			return err
 		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to copy symlink %q", path)
+		}
 		relPath, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
@@ -257,6 +265,46 @@ func copyDirectory(src, dst string) error {
 			return err
 		}
 		return nil
+	})
+}
+
+func copyProjectDirectory(src, dst string) error {
+	root, err := filepath.Abs(src)
+	if err != nil {
+		return err
+	}
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		if relative == "node_modules" || strings.HasPrefix(relative, "node_modules"+string(os.PathSeparator)) || relative == ".git" || strings.HasPrefix(relative, ".git"+string(os.PathSeparator)) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		base := filepath.Base(relative)
+		if base == ".npmrc" || base == ".yarnrc" || base == ".yarnrc.yml" || base == ".env" || strings.HasPrefix(base, ".env.") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink %q is not supported", relative)
+		}
+		target := filepath.Join(dst, relative)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		return copyFile(path, target)
 	})
 }
 
