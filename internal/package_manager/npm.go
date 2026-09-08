@@ -35,21 +35,109 @@ type NPM struct {
 }
 
 func DefaultNPMInstaller(args []string) error {
-	return defaultNPMInstallerInDir("", args)
+	return defaultNPMInstallerInDir("", args, false)
 }
 
-func defaultNPMInstallerInDir(projectDir string, args []string) error {
+func defaultNPMInstallerInDir(projectDir string, args []string, jsonOutput bool) error {
+	if err := validateHostInstallArgs(args); err != nil {
+		return err
+	}
+	env, cleanup, err := prepareNPMEnvironment(projectDir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	cmd := exec.Command("npm", args...)
 	if projectDir != "" {
 		cmd.Dir = projectDir
 	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Env = env
+	if jsonOutput {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Stdin = os.Stdin
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("npm %v: %w", args, err)
 	}
 	return nil
+}
+
+func validateHostInstallArgs(args []string) error {
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		for _, prefix := range []string{
+			"--prefix", "--userconfig", "--globalconfig", "--cache", "--registry", "--config",
+		} {
+			if lower == prefix || strings.HasPrefix(lower, prefix+"=") {
+				return fmt.Errorf("unsupported npm option %q: host installation target or configuration cannot be redirected", arg)
+			}
+		}
+		if lower == "-g" || lower == "--global" || lower == "-c" {
+			return fmt.Errorf("unsupported npm option %q: global or configuration installation is not allowed", arg)
+		}
+		if strings.HasPrefix(lower, "-c=") || strings.HasPrefix(lower, "-c") && len(lower) > 2 {
+			return fmt.Errorf("unsupported npm option %q: npm configuration cannot be redirected", arg)
+		}
+	}
+	return nil
+}
+
+func prepareNPMEnvironment(projectDir string) ([]string, func(), error) {
+	if projectDir == "" {
+		var err error
+		projectDir, err = os.Getwd()
+		if err != nil {
+			return nil, func() {}, fmt.Errorf("determine npm project directory: %w", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, ".npmrc")); err == nil {
+		return nil, func() {}, fmt.Errorf("project .npmrc is not supported for host installation; remove it or use explicit SafeRun-supported registry settings")
+	} else if !os.IsNotExist(err) {
+		return nil, func() {}, fmt.Errorf("inspect project .npmrc: %w", err)
+	}
+
+	configDir, err := os.MkdirTemp("", "saferun-npm-config-")
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("create isolated npm configuration: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(configDir) }
+	userConfig := filepath.Join(configDir, "user.npmrc")
+	globalConfig := filepath.Join(configDir, "global.npmrc")
+	for _, path := range []string{userConfig, globalConfig} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("create isolated npm configuration: %w", err)
+		}
+	}
+	env := []string{
+		"HOME=" + configDir,
+		"TMPDIR=" + configDir,
+		"npm_config_userconfig=" + userConfig,
+		"npm_config_globalconfig=" + globalConfig,
+		"npm_config_cache=" + filepath.Join(configDir, "cache"),
+	}
+	for _, entry := range os.Environ() {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && allowedNPMEnvironmentVariable(name) {
+			env = append(env, name+"="+value)
+		}
+	}
+	if os.Getenv("USERPROFILE") != "" {
+		env = append(env, "USERPROFILE="+configDir)
+	}
+	return env, cleanup, nil
+}
+
+func allowedNPMEnvironmentVariable(name string) bool {
+	upper := strings.ToUpper(name)
+	if upper == "PATH" || upper == "SYSTEMROOT" || upper == "COMSPEC" || upper == "PATHEXT" || upper == "LANG" || upper == "TERM" || strings.HasPrefix(upper, "LC_") {
+		return true
+	}
+	return false
 }
 
 func (n NPM) Name() string {
@@ -105,17 +193,22 @@ func (n NPM) Install(args []string) error {
 	}
 	projectMode := len(parsed.Packages) == 0
 	projectDir := n.ProjectDir
+	if projectMode {
+		if err := validateProjectFlags(parsed.Flags); err != nil {
+			return err
+		}
+	}
 	if projectMode && projectDir == "" {
 		projectDir, err = os.Getwd()
 		if err != nil {
 			return fmt.Errorf("determine current project directory: %w", err)
 		}
-		if err := validateProjectFlags(parsed.Flags); err != nil {
-			return err
-		}
 	}
 	packageArgs := append([]string(nil), parsed.Packages...)
 	installArgs := append([]string(nil), args...)
+	if err := validateHostInstallArgs(installArgs); err != nil {
+		return err
+	}
 	analysisArgs := append([]string(nil), packageArgs...)
 	if projectMode {
 		manifestPath := filepath.Join(projectDir, "package.json")
@@ -233,6 +326,9 @@ func (n NPM) Install(args []string) error {
 			defer os.RemoveAll(downloaded)
 			report.Source = downloaded
 			fmt.Printf("Extracted to: %s\n", report.Source)
+			if err := validateDownloadedPackageIdentity(resolved, downloaded); err != nil {
+				return fmt.Errorf("failed to validate package identity: %w", err)
+			}
 		}
 
 		analysis, err := analyzer.AnalyzePackageJSON(filepath.Join(report.Source, "package.json"))
@@ -576,7 +672,7 @@ func (n NPM) Install(args []string) error {
 	installer := n.RealInstaller
 	if installer == nil {
 		if projectMode {
-			installer = func(installArgs []string) error { return defaultNPMInstallerInDir(projectDir, installArgs) }
+			installer = func(installArgs []string) error { return defaultNPMInstallerInDir(projectDir, installArgs, n.JSON) }
 		} else {
 			installer = DefaultNPMInstaller
 		}
@@ -772,6 +868,20 @@ func (n NPM) Install(args []string) error {
 	fmt.Println("Audit")
 	fmt.Println("-----")
 	fmt.Println("✓ Security event recorded")
+	return nil
+}
+
+func validateDownloadedPackageIdentity(expected registry.PackageInfo, source string) error {
+	manifest, err := readPackageJSON(source)
+	if err != nil {
+		return err
+	}
+	if manifest.Name != expected.Name {
+		return fmt.Errorf("package name mismatch: expected %q, got %q", expected.Name, manifest.Name)
+	}
+	if manifest.Version != expected.Version {
+		return fmt.Errorf("package version mismatch: expected %q, got %q", expected.Version, manifest.Version)
+	}
 	return nil
 }
 

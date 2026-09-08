@@ -139,6 +139,7 @@ func verifyIntegrity(integrity string, digest []byte) error {
 func extractNPMPackage(source io.Reader, destination string) error {
 	tarReader := tar.NewReader(source)
 	root := filepath.Clean(destination)
+	var archiveRoot string
 
 	for {
 		header, err := tarReader.Next()
@@ -157,11 +158,28 @@ func extractNPMPackage(source io.Reader, destination string) error {
 		if cleanName == "." || path.IsAbs(cleanName) || cleanName == ".." || strings.HasPrefix(cleanName, "../") {
 			return fmt.Errorf("unsafe archive path: %s", archiveName)
 		}
-		if cleanName != "package" && !strings.HasPrefix(cleanName, "package/") {
+		parts := strings.Split(cleanName, "/")
+		if archiveRoot == "" {
+			if len(parts) == 1 {
+				if header.Typeflag != tar.TypeDir {
+					return fmt.Errorf("invalid npm archive path: %s", archiveName)
+				}
+				archiveRoot = parts[0]
+			} else {
+				archiveRoot = parts[0]
+			}
+			if archiveRoot == "" {
+				return fmt.Errorf("invalid npm archive path: %s", archiveName)
+			}
+		}
+		if cleanName != archiveRoot && !strings.HasPrefix(cleanName, archiveRoot+"/") {
 			return fmt.Errorf("invalid npm archive path: %s", archiveName)
 		}
 
-		name := strings.TrimPrefix(cleanName, "package/")
+		name := strings.TrimPrefix(cleanName, archiveRoot+"/")
+		if cleanName == archiveRoot {
+			name = ""
+		}
 		if name == "" {
 			continue
 		}

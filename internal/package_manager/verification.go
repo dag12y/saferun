@@ -194,6 +194,8 @@ type packageJSON struct {
 }
 
 type projectManifest struct {
+	Name                 string
+	Version              string
 	Dependencies         map[string]string
 	DevDependencies      map[string]string
 	OptionalDependencies map[string]string
@@ -212,6 +214,8 @@ func loadProjectManifest(path string) (projectManifest, error) {
 	}
 
 	return projectManifest{
+		Name:                 pkg.Name,
+		Version:              pkg.Version,
 		Dependencies:         pkg.Dependencies,
 		DevDependencies:      pkg.DevDependencies,
 		OptionalDependencies: pkg.OptionalDependencies,

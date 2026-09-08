@@ -1,6 +1,8 @@
 package package_manager
 
 import (
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -22,8 +24,8 @@ func TestResolveProjectReadsLockfilePackages(t *testing.T) {
 		"lockfileVersion": 3,
 		"packages": map[string]any{
 			"":                    map[string]any{"dependencies": map[string]string{"lodash": "^4.17.0"}, "devDependencies": map[string]string{"jest": "^29.0.0"}},
-			"node_modules/lodash": map[string]any{"version": "4.17.21", "resolved": "https://registry.example/lodash.tgz", "integrity": "sha512-test"},
-			"node_modules/jest":   map[string]any{"version": "29.7.0", "resolved": "https://registry.example/jest.tgz", "integrity": "sha512-test"},
+			"node_modules/lodash": map[string]any{"version": "4.17.21", "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz", "integrity": testIntegrity()},
+			"node_modules/jest":   map[string]any{"version": "29.7.0", "resolved": "https://registry.npmjs.org/jest/-/jest-29.7.0.tgz", "integrity": testIntegrity()},
 		},
 	})
 
@@ -60,7 +62,7 @@ func TestNPMInstallProjectJSONOutput(t *testing.T) {
 		"lockfileVersion": 3,
 		"packages": map[string]any{
 			"":                    map[string]any{"dependencies": map[string]string{"lodash": "^4.17.0"}},
-			"node_modules/lodash": map[string]any{"version": "4.17.21", "resolved": "https://registry.example/lodash.tgz", "integrity": "sha512-test"},
+			"node_modules/lodash": map[string]any{"version": "4.17.21", "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz", "integrity": testIntegrity()},
 		},
 	})
 
@@ -102,6 +104,11 @@ func TestNPMInstallProjectJSONOutput(t *testing.T) {
 	if response["scope"] != "project" || response["packages_analyzed"] != float64(1) {
 		t.Fatalf("unexpected project report: %v", response)
 	}
+}
+
+func testIntegrity() string {
+	digest := sha512.Sum512(nil)
+	return "sha512-" + base64.StdEncoding.EncodeToString(digest[:])
 }
 
 func writeProjectJSON(t *testing.T, path string, value any) {

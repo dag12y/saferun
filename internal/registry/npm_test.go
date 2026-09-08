@@ -79,9 +79,13 @@ func TestExtractNPMPackageRejectsUnsafePaths(t *testing.T) {
 }
 
 func TestExtractNPMPackageRejectsInvalidLayoutAndSymlink(t *testing.T) {
-	for _, name := range []string{"index.js", "other/package.json"} {
+	for _, name := range []string{"index.js", "package/index.js"} {
 		t.Run(name, func(t *testing.T) {
-			err := extractFixture(t, npmTarball(t, map[string]string{name: "invalid"}), t.TempDir())
+			files := map[string]string{name: "invalid"}
+			if name == "package/index.js" {
+				files["other/package.json"] = "mixed roots"
+			}
+			err := extractFixture(t, npmTarball(t, files), t.TempDir())
 			if err == nil || !strings.Contains(err.Error(), "invalid npm archive path") {
 				t.Fatalf("expected invalid layout error, got %v", err)
 			}

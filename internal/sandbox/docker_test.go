@@ -22,7 +22,7 @@ func TestBuildDockerArgsSecurityHardening(t *testing.T) {
 		Workspace: workspace,
 		PidsLimit: 128,
 		Timeout:   5 * time.Minute,
-	}, "sh", "-c", "echo ok")
+	}, "infinity")
 
 	combined := strings.Join(args, " ")
 	for _, want := range []string{
@@ -36,12 +36,15 @@ func TestBuildDockerArgsSecurityHardening(t *testing.T) {
 		"--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
 		"--volume=/tmp/saferun-workspace:/saferun/workspace",
 		"--workdir=/saferun/workspace",
-		"--entrypoint=/bin/sh",
+		"--entrypoint=sleep",
 		"saferun-node:dev",
 	} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("docker args missing %q in %v", want, args)
 		}
+	}
+	if got := args[len(args)-1:]; !reflect.DeepEqual(got, []string{"infinity"}) {
+		t.Fatalf("expected direct container argv, got %v", got)
 	}
 	if runtime.GOOS != "windows" {
 		want := "--user=" + strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
@@ -58,6 +61,15 @@ func TestBuildDockerArgsSecurityHardening(t *testing.T) {
 		if strings.Contains(combined, forbidden) {
 			t.Fatalf("docker args unexpectedly include %q in %v", forbidden, args)
 		}
+	}
+}
+
+func TestBuildDockerArgsDoesNotInterpretShellMetacharacters(t *testing.T) {
+	command := []string{"npm", "install", "; touch /tmp/pwned", "&&", "echo", "$(touch /tmp/pwned)", "`id`", "a b", `"quoted"`, "|"}
+	args := buildDockerArgs(Config{Image: "saferun-node:dev", Workspace: t.TempDir()}, command...)
+	got := args[len(args)-len(command):]
+	if !reflect.DeepEqual(got, command) {
+		t.Fatalf("command arguments were rewritten: got %v want %v", got, command)
 	}
 }
 

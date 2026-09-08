@@ -90,7 +90,7 @@ func TestNPMInstallCancelledDoesNotRunRealInstall(t *testing.T) {
 		},
 		DownloadFunc: func(pkg registry.PackageInfo) (string, error) {
 			dir := t.TempDir()
-			if err := os.WriteFile(dir+"/package.json", []byte(`{"name":"test","version":"1.0.0"}`), 0o600); err != nil {
+			if err := os.WriteFile(dir+"/package.json", []byte(fmt.Sprintf(`{"name":"%s","version":"%s"}`, pkg.Name, pkg.Version)), 0o600); err != nil {
 				return "", err
 			}
 			return dir, nil
@@ -130,7 +130,7 @@ func TestNPMInstallApprovedInvokesRealInstall(t *testing.T) {
 		},
 		DownloadFunc: func(pkg registry.PackageInfo) (string, error) {
 			dir := t.TempDir()
-			if err := os.WriteFile(dir+"/package.json", []byte(`{"name":"test","version":"1.0.0"}`), 0o600); err != nil {
+			if err := os.WriteFile(dir+"/package.json", []byte(fmt.Sprintf(`{"name":"%s","version":"%s"}`, pkg.Name, pkg.Version)), 0o600); err != nil {
 				return "", err
 			}
 			return dir, nil

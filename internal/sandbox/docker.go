@@ -72,7 +72,7 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
 
-	args := buildDockerArgs(config, "tail -f /dev/null")
+	args := buildDockerArgs(config, "infinity")
 	args = append([]string{"run", "-d", "--name", containerName, "--rm"}, args...)
 	startCmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := startCmd.CombinedOutput()
@@ -170,15 +170,12 @@ func buildDockerArgs(config Config, command ...string) []string {
 		"--env=TMPDIR=/tmp",
 		"--volume=" + workspace + ":/saferun/workspace",
 		"--workdir=/saferun/workspace",
-		"--entrypoint=/bin/sh",
-		config.Image,
-		"-c",
-		strings.Join(command, " "),
 	}
 	if runtime.GOOS != "windows" {
-		user := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-		args = append(args[:len(args)-4], append([]string{"--user=" + user}, args[len(args)-4:]...)...)
+		args = append(args, "--user="+strconv.Itoa(os.Getuid())+":"+strconv.Itoa(os.Getgid()))
 	}
+	args = append(args, "--entrypoint=sleep", config.Image)
+	args = append(args, command...)
 	return args
 }
 

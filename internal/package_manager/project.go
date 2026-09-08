@@ -1,9 +1,12 @@
 package package_manager
 
 import (
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +32,7 @@ type lockfile struct {
 }
 
 type lockPackage struct {
+	Name                 string            `json:"name"`
 	Version              string            `json:"version"`
 	Resolved             string            `json:"resolved"`
 	Integrity            string            `json:"integrity"`
@@ -84,28 +88,50 @@ func validateProjectLockfile(path string, manifest projectManifest) error {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return fmt.Errorf("parse package-lock.json: %w", err)
 	}
+	if lock.LockfileVersion != 2 && lock.LockfileVersion != 3 || lock.Packages == nil {
+		return fmt.Errorf("unsupported package-lock.json format; expected lockfileVersion 2 or 3")
+	}
 	root, ok := lock.Packages[""]
 	if !ok {
 		return fmt.Errorf("package-lock.json is missing its root project entry")
 	}
-	for name, spec := range manifest.Dependencies {
-		if root.Dependencies[name] != spec {
-			return fmt.Errorf("package.json and package-lock.json disagree for dependency %s", name)
+	if root.Name != "" && root.Name != manifest.Name {
+		return fmt.Errorf("package.json and package-lock.json disagree for project name")
+	}
+	if root.Version != "" && root.Version != manifest.Version {
+		return fmt.Errorf("package.json and package-lock.json disagree for project version")
+	}
+	sections := []struct {
+		kind     string
+		expected map[string]string
+		actual   map[string]string
+	}{
+		{"dependency", manifest.Dependencies, root.Dependencies},
+		{"devDependency", manifest.DevDependencies, root.DevDependencies},
+		{"optionalDependency", manifest.OptionalDependencies, root.OptionalDependencies},
+		{"peerDependency", manifest.PeerDependencies, root.PeerDependencies},
+	}
+	for _, section := range sections {
+		if len(section.expected) != len(section.actual) {
+			return fmt.Errorf("package.json and package-lock.json disagree for %s set", section.kind)
+		}
+		for name, spec := range section.expected {
+			if section.actual[name] != spec {
+				return fmt.Errorf("package.json and package-lock.json disagree for %s %s", section.kind, name)
+			}
 		}
 	}
-	for name, spec := range manifest.DevDependencies {
-		if root.DevDependencies[name] != spec {
-			return fmt.Errorf("package.json and package-lock.json disagree for devDependency %s", name)
+	for key, entry := range lock.Packages {
+		if key == "" {
+			continue
+		}
+		if err := validateLockPackageEntry(key, entry); err != nil {
+			return err
 		}
 	}
-	for name, spec := range manifest.OptionalDependencies {
-		if root.OptionalDependencies[name] != spec {
-			return fmt.Errorf("package.json and package-lock.json disagree for optionalDependency %s", name)
-		}
-	}
-	for name, spec := range manifest.PeerDependencies {
-		if root.PeerDependencies[name] != spec {
-			return fmt.Errorf("package.json and package-lock.json disagree for peerDependency %s", name)
+	for _, dependency := range manifest.dependencies() {
+		if !lockContainsPackage(lock.Packages, dependency.Name) {
+			return fmt.Errorf("package-lock.json has no package entry for %s", dependency.Name)
 		}
 	}
 	return nil
@@ -202,8 +228,18 @@ func readLockfile(path string) ([]registry.PackageInfo, error) {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return nil, fmt.Errorf("parse package-lock.json: %w", err)
 	}
-	if lock.LockfileVersion < 2 || lock.Packages == nil {
+	if lock.LockfileVersion != 2 && lock.LockfileVersion != 3 || lock.Packages == nil {
 		return nil, fmt.Errorf("unsupported package-lock.json format; expected lockfileVersion 2 or 3")
+	}
+	if _, ok := lock.Packages[""]; !ok {
+		return nil, fmt.Errorf("package-lock.json is missing its root project entry")
+	}
+	for key, entry := range lock.Packages {
+		if key != "" {
+			if err := validateLockPackageEntry(key, entry); err != nil {
+				return nil, err
+			}
+		}
 	}
 	keys := make([]string, 0, len(lock.Packages))
 	for key := range lock.Packages {
@@ -215,8 +251,8 @@ func readLockfile(path string) ([]registry.PackageInfo, error) {
 	result := make([]registry.PackageInfo, 0, len(keys))
 	for _, key := range keys {
 		entry := lock.Packages[key]
-		if entry.Link || entry.Version == "" || entry.Resolved == "" || entry.Integrity == "" {
-			return nil, fmt.Errorf("package %s has no verifiable registry tarball and cannot be safely analyzed", strings.TrimPrefix(key, "node_modules/"))
+		if err := validateLockPackageEntry(key, entry); err != nil {
+			return nil, err
 		}
 		result = append(result, registry.PackageInfo{
 			Name: packageNameFromLockKey(key), Version: entry.Version,
@@ -234,6 +270,69 @@ func packageNameFromLockKey(key string) string {
 		return name
 	}
 	return strings.TrimPrefix(name, "node_modules/")
+}
+
+func validateLockPackageEntry(key string, entry lockPackage) error {
+	if !strings.HasPrefix(key, "node_modules/") || strings.Contains(key, `\`) || strings.Contains(key, "//") {
+		return fmt.Errorf("unsupported package-lock.json package path %q", key)
+	}
+	name := packageNameFromLockKey(key)
+	if !validPackageName(name) {
+		return fmt.Errorf("invalid package name in package-lock.json path %q", key)
+	}
+	if entry.Name != "" && entry.Name != name {
+		return fmt.Errorf("package-lock.json path %q disagrees with package name %q", key, entry.Name)
+	}
+	if entry.Link || entry.Version == "" || entry.Resolved == "" || entry.Integrity == "" {
+		return fmt.Errorf("package %s has no verifiable registry tarball and cannot be safely analyzed", name)
+	}
+	if err := validateResolvedURL(entry.Resolved); err != nil {
+		return fmt.Errorf("package %s has unsafe resolved URL: %w", name, err)
+	}
+	if err := validateIntegrity(entry.Integrity); err != nil {
+		return fmt.Errorf("package %s has invalid integrity: %w", name, err)
+	}
+	return nil
+}
+
+func lockContainsPackage(packages map[string]lockPackage, name string) bool {
+	for key := range packages {
+		if key != "" && packageNameFromLockKey(key) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func validateResolvedURL(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() != "registry.npmjs.org" {
+		return fmt.Errorf("only https://registry.npmjs.org tarballs are supported")
+	}
+	return nil
+}
+
+func validateIntegrity(value string) error {
+	parts := strings.SplitN(value, "-", 2)
+	if len(parts) != 2 || parts[0] != "sha512" {
+		return fmt.Errorf("expected sha512 integrity")
+	}
+	digest, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil || len(digest) != sha512.Size {
+		return fmt.Errorf("invalid sha512 digest")
+	}
+	return nil
+}
+
+func validPackageName(name string) bool {
+	if name == "" || strings.ContainsAny(name, "\\\t\r\n ") || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+		return false
+	}
+	if strings.HasPrefix(name, "@") {
+		parts := strings.Split(name, "/")
+		return len(parts) == 2 && parts[0] != "@" && parts[1] != ""
+	}
+	return !strings.Contains(name, "/")
 }
 
 func packageSpec(name, version string) string {
