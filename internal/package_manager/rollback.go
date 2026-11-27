@@ -9,9 +9,13 @@ import (
 )
 
 type ProjectBackup struct {
-	ProjectDir string
-	BackupDir  string
-	entries    []backupEntry
+	ProjectDir          string
+	BackupDir           string
+	wholeNodeModules    bool
+	nodeModulesDir      string
+	nodeModulesExisted  bool
+	existingNodeModules map[string]struct{}
+	entries             []backupEntry
 }
 
 type backupEntry struct {
@@ -37,8 +41,20 @@ func createProjectBackupMode(projectDir string, packageSpecs []string, wholeNode
 	}
 
 	backup := &ProjectBackup{
-		ProjectDir: absProjectDir,
-		BackupDir:  backupDir,
+		ProjectDir:       absProjectDir,
+		BackupDir:        backupDir,
+		wholeNodeModules: wholeNodeModules,
+		nodeModulesDir:   filepath.Join(absProjectDir, "node_modules"),
+	}
+
+	if !wholeNodeModules {
+		existing, existed, err := snapshotTopLevelNodeModules(backup.nodeModulesDir)
+		if err != nil {
+			_ = os.RemoveAll(backupDir)
+			return nil, err
+		}
+		backup.nodeModulesExisted = existed
+		backup.existingNodeModules = existing
 	}
 
 	paths := collectBackupTargetsMode(absProjectDir, packageSpecs, wholeNodeModules)
@@ -97,6 +113,11 @@ func (b *ProjectBackup) Restore() error {
 		return nil
 	}
 	var errs []string
+	if !b.wholeNodeModules && b.nodeModulesDir != "" {
+		if err := b.pruneAddedNodeModules(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
 	for _, entry := range b.entries {
 		if err := b.restoreEntry(entry); err != nil {
 			errs = append(errs, err.Error())
@@ -107,6 +128,94 @@ func (b *ProjectBackup) Restore() error {
 	}
 	if err := b.Cleanup(); err != nil {
 		return fmt.Errorf("cleanup backup after restore: %w", err)
+	}
+	return nil
+}
+
+func snapshotTopLevelNodeModules(nodeModulesDir string) (map[string]struct{}, bool, error) {
+	info, err := os.Lstat(nodeModulesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("inspect node_modules: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, true, nil
+	}
+
+	entries, err := os.ReadDir(nodeModulesDir)
+	if err != nil {
+		return nil, true, fmt.Errorf("list node_modules: %w", err)
+	}
+
+	existing := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "@") && entry.IsDir() {
+			scopedEntries, err := os.ReadDir(filepath.Join(nodeModulesDir, name))
+			if err != nil {
+				return nil, true, fmt.Errorf("list scoped node_modules %s: %w", name, err)
+			}
+			existing[name] = struct{}{}
+			for _, scoped := range scopedEntries {
+				existing[name+"/"+scoped.Name()] = struct{}{}
+			}
+			continue
+		}
+		existing[name] = struct{}{}
+	}
+	return existing, true, nil
+}
+
+func (b *ProjectBackup) pruneAddedNodeModules() error {
+	if err := ensureInsideProject(b.ProjectDir, b.nodeModulesDir); err != nil {
+		return err
+	}
+	if !b.nodeModulesExisted {
+		if err := os.RemoveAll(b.nodeModulesDir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove newly created node_modules: %w", err)
+		}
+		return nil
+	}
+
+	entries, err := os.ReadDir(b.nodeModulesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("list node_modules for rollback: %w", err)
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "@") && entry.IsDir() {
+			scopeDir := filepath.Join(b.nodeModulesDir, name)
+			if _, scopeExisted := b.existingNodeModules[name]; !scopeExisted {
+				if err := os.RemoveAll(scopeDir); err != nil {
+					return fmt.Errorf("remove added scope directory %s: %w", name, err)
+				}
+				continue
+			}
+			scopedEntries, err := os.ReadDir(scopeDir)
+			if err != nil {
+				return fmt.Errorf("list scoped node_modules %s for rollback: %w", name, err)
+			}
+			for _, scoped := range scopedEntries {
+				key := name + "/" + scoped.Name()
+				if _, ok := b.existingNodeModules[key]; !ok {
+					if err := os.RemoveAll(filepath.Join(scopeDir, scoped.Name())); err != nil {
+						return fmt.Errorf("remove added transitive package %s: %w", key, err)
+					}
+				}
+			}
+			continue
+		}
+		if _, ok := b.existingNodeModules[name]; !ok {
+			if err := os.RemoveAll(filepath.Join(b.nodeModulesDir, name)); err != nil {
+				return fmt.Errorf("remove added transitive package %s: %w", name, err)
+			}
+		}
 	}
 	return nil
 }

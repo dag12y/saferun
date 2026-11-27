@@ -106,13 +106,16 @@ Higher-risk results include the relevant findings and can end with a `BLOCK` dec
 saferun audit
 ```
 
-## JSON Output
+## JSON and SARIF Output
 
-Use `--json` when a script or CI/CD pipeline needs to consume the security result without terminal formatting or progress output:
+Use `--json` (or `--format=json`) when a script or CI/CD pipeline needs to consume the security result without terminal formatting or progress output, or `--format=sarif` to generate SARIF v2.1.0 output for GitHub Code Scanning:
 
 ```bash
 saferun npm install express --json
+saferun npm install --format=sarif > saferun.sarif
 ```
+
+Common npm install aliases (`saferun npm i <package>` and `saferun npm add <package>`) are also supported.
 
 SafeRun writes one JSON report to standard output. It includes the package and version, risk level and findings, behavior/process/network/file analysis, policy decision, and timestamp:
 
@@ -149,6 +152,40 @@ TIMESTAMP           | DECISION     | PACKAGE                         | RISK    |
 ```
 
 Use `saferun audit --all` to display the complete history or `saferun audit --clear` to remove it. The default audit file is stored at `~/.saferun/audit.jsonl`.
+
+## Configuration (`.saferunrc`)
+
+Create a `.saferunrc` JSON file in your project root (or `~/.saferunrc`, or point `SAFERUN_CONFIG` to a custom file) to customize sandbox limits, allowed hosts, policy strictness, and OSV vulnerability checks:
+
+```json
+{
+  "sandbox": {
+    "memory": "1g",
+    "cpus": "2",
+    "pids_limit": 256,
+    "timeout": "10m"
+  },
+  "network": {
+    "allowed_hosts": ["npm.internal.corp", "*.artifactory.local"]
+  },
+  "policy": {
+    "block_on_medium": true
+  },
+  "osv": {
+    "enabled": true
+  }
+}
+```
+
+## GitHub Action Integration
+
+Use the composite action in `.github/actions/saferun` to run SafeRun in CI and upload SARIF results to GitHub Code Scanning:
+
+```yaml
+- uses: ./github/actions/saferun
+  with:
+    upload-sarif: "true"
+```
 
 ## Supported Platforms
 
@@ -217,7 +254,7 @@ saferun --version
 
 ### Manual GitHub Release Installation
 
-Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.0.5 release](https://github.com/dag12y/saferun/releases/tag/v1.0.5). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
+Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.1.0 release](https://github.com/dag12y/saferun/releases/tag/v1.1.0). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -234,14 +271,14 @@ To update, run the installer again. To remove SafeRun, delete `%LOCALAPPDATA%\Sa
 
 Configuration variables:
 
-- `SAFERUN_VERSION`: release tag, such as `v1.0.5`
+- `SAFERUN_VERSION`: release tag, such as `v1.1.0`
 - `SAFERUN_RELEASE_BASE_URL`: HTTPS release base URL; defaults to `https://github.com/dag12y/saferun/releases/download`
 - `SAFERUN_INSTALL_DIR`: per-user installation directory; defaults to `%LOCALAPPDATA%\SafeRun\bin`
 
 For example, to install a specific Windows release:
 
 ```powershell
-$env:SAFERUN_VERSION = 'v1.0.5'
+$env:SAFERUN_VERSION = 'v1.1.0'
 $env:SAFERUN_INSTALL_DIR = "$env:LOCALAPPDATA\SafeRun\bin"
 irm https://www.saferun.tech/install.ps1 | iex
 ```

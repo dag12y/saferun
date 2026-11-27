@@ -258,6 +258,94 @@ func TestProjectBackupRestoreRejectsOutsideProjectPath(t *testing.T) {
 	}
 }
 
+func TestProjectBackupRemovesTransitiveDependenciesWhenNodeModulesCreated(t *testing.T) {
+	projectDir := t.TempDir()
+	backup, err := createProjectBackup(projectDir, []string{"lodash"})
+	if err != nil {
+		t.Fatalf("createProjectBackup: %v", err)
+	}
+
+	for _, rel := range []string{
+		filepath.Join("node_modules", "lodash", "package.json"),
+		filepath.Join("node_modules", "transitive-dep", "package.json"),
+		filepath.Join("node_modules", "@scope", "nested-dep", "package.json"),
+	} {
+		full := filepath.Join(projectDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(`{"name":"pkg","version":"1.0.0"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := backup.Restore(); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("expected newly created node_modules to be completely removed, got %v", err)
+	}
+}
+
+func TestProjectBackupPrunesNewTransitiveDependenciesPreservingExisting(t *testing.T) {
+	projectDir := t.TempDir()
+	for _, rel := range []string{
+		filepath.Join("node_modules", "existing-pkg", "package.json"),
+		filepath.Join("node_modules", "@org", "keep", "package.json"),
+	} {
+		full := filepath.Join(projectDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(`{"name":"keep","version":"1.0.0"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	backup, err := createProjectBackup(projectDir, []string{"lodash"})
+	if err != nil {
+		t.Fatalf("createProjectBackup: %v", err)
+	}
+
+	for _, rel := range []string{
+		filepath.Join("node_modules", "lodash", "package.json"),
+		filepath.Join("node_modules", "transitive-dep", "package.json"),
+		filepath.Join("node_modules", "@org", "new-dep", "package.json"),
+		filepath.Join("node_modules", "@newscope", "extra", "package.json"),
+	} {
+		full := filepath.Join(projectDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(`{"name":"added","version":"1.0.0"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := backup.Restore(); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	for _, keep := range []string{
+		filepath.Join(projectDir, "node_modules", "existing-pkg", "package.json"),
+		filepath.Join(projectDir, "node_modules", "@org", "keep", "package.json"),
+	} {
+		if _, err := os.Stat(keep); err != nil {
+			t.Fatalf("expected existing package %s to be preserved: %v", keep, err)
+		}
+	}
+	for _, removed := range []string{
+		filepath.Join(projectDir, "node_modules", "lodash"),
+		filepath.Join(projectDir, "node_modules", "transitive-dep"),
+		filepath.Join(projectDir, "node_modules", "@org", "new-dep"),
+		filepath.Join(projectDir, "node_modules", "@newscope"),
+	} {
+		if _, err := os.Stat(removed); !os.IsNotExist(err) {
+			t.Fatalf("expected added dependency %s to be removed, got %v", removed, err)
+		}
+	}
+}
+
 func findEntry(backup *ProjectBackup, target string) (backupEntry, bool) {
 	for _, entry := range backup.entries {
 		if entry.Path == target {

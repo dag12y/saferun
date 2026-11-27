@@ -5,7 +5,7 @@ if (set -o pipefail) 2>/dev/null; then
     set -o pipefail
 fi
 
-VERSION=${SAFERUN_VERSION:-v1.0.5}
+VERSION=${SAFERUN_VERSION:-v1.1.0}
 RELEASE_BASE_URL=${SAFERUN_RELEASE_BASE_URL:-https://github.com/dag12y/saferun/releases/download}
 INSTALL_DIR=${SAFERUN_INSTALL_DIR:-"$HOME/.local/bin"}
 

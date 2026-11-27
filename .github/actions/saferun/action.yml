@@ -16,7 +16,7 @@ inputs:
   saferun-version:
     description: "SafeRun release version to install"
     required: false
-    default: "v1.0.6"
+    default: "v1.1.0"
 
 runs:
   using: "composite"
