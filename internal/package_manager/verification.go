@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/dag12y/saferun/internal/semver"
 )
 
 // PackageVerification captures the status of a single package after the real npm
@@ -97,7 +99,14 @@ func (v InstallationVerifier) Verify(requestedPackages []string, flags []string)
 		verification.Installed = true
 		verification.InstalledVersion = installedPackage.Version
 		if expectedVersion != "" {
-			verification.VersionMatch = installedPackage.Version == expectedVersion
+			if semver.IsRangeOrVersion(expectedVersion) {
+				matched, matchErr := semver.Satisfies(installedPackage.Version, expectedVersion)
+				verification.VersionMatch = matchErr == nil && matched
+			} else {
+				// Non-semver specifiers such as dist-tags ("latest", "next") resolve
+				// dynamically; accept any non-empty installed version.
+				verification.VersionMatch = installedPackage.Version != ""
+			}
 			if !verification.VersionMatch {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s version mismatch: expected %s, installed %s", pkgName, expectedVersion, installedPackage.Version))
 			}

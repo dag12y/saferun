@@ -7,6 +7,8 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,4 +143,69 @@ func npmTarball(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+func TestNPMRegistryResolveSpecifiers(t *testing.T) {
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.EscapedPath())
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.EscapedPath() {
+		case "/lodash":
+			_, _ = io.WriteString(w, `{
+				"dist-tags": {"latest": "4.17.21", "next": "5.0.0-alpha.1"},
+				"versions": {
+					"4.17.20": {"dist": {"tarball": "https://example.test/lodash-4.17.20.tgz", "integrity": "sha512-a"}},
+					"4.17.21": {"dist": {"tarball": "https://example.test/lodash-4.17.21.tgz", "integrity": "sha512-b"}},
+					"5.0.0-alpha.1": {"dist": {"tarball": "https://example.test/lodash-5.0.0-alpha.1.tgz", "integrity": "sha512-c"}}
+				}
+			}`)
+		case "/@types%2Fnode":
+			_, _ = io.WriteString(w, `{
+				"dist-tags": {"latest": "22.0.0"},
+				"versions": {
+					"20.14.0": {"dist": {"tarball": "https://example.test/node-20.14.0.tgz", "integrity": "sha512-d"}},
+					"22.0.0": {"dist": {"tarball": "https://example.test/node-22.0.0.tgz", "integrity": "sha512-e"}}
+				}
+			}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	reg := NPMRegistry{BaseURL: server.URL, HTTPClient: server.Client()}
+
+	cases := []struct {
+		spec        string
+		wantName    string
+		wantVersion string
+	}{
+		{"lodash", "lodash", "4.17.21"},
+		{"lodash@4.17.20", "lodash", "4.17.20"},
+		{"lodash@^4.17.0", "lodash", "4.17.21"},
+		{"lodash@next", "lodash", "5.0.0-alpha.1"},
+		{"@types/node", "@types/node", "22.0.0"},
+		{"@types/node@20.14.0", "@types/node", "20.14.0"},
+	}
+
+	for _, tc := range cases {
+		info, err := reg.Resolve(tc.spec)
+		if err != nil {
+			t.Fatalf("Resolve(%q) unexpected error: %v", tc.spec, err)
+		}
+		if info.Name != tc.wantName || info.Version != tc.wantVersion {
+			t.Fatalf("Resolve(%q) = %s@%s, want %s@%s", tc.spec, info.Name, info.Version, tc.wantName, tc.wantVersion)
+		}
+	}
+
+	if _, err := reg.Resolve("lodash@9.9.9"); err == nil {
+		t.Fatal("expected error for missing version")
+	}
+	if _, err := reg.Resolve("nonexistent"); err == nil {
+		t.Fatal("expected error for missing package")
+	}
+	if _, err := reg.Resolve("@invalid"); err == nil {
+		t.Fatal("expected error for invalid scoped specifier")
+	}
 }

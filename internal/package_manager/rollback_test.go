@@ -231,6 +231,33 @@ func TestProjectBackupRejectsSymlinkTraversal(t *testing.T) {
 	}
 }
 
+func TestProjectBackupRestoreRejectsOutsideProjectPath(t *testing.T) {
+	projectDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "escape.txt")
+	if err := os.WriteFile(outsideFile, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	backup := &ProjectBackup{
+		ProjectDir: projectDir,
+		BackupDir:  t.TempDir(),
+		entries: []backupEntry{
+			{
+				Path:    outsideFile,
+				Existed: false,
+			},
+		},
+	}
+
+	if err := backup.Restore(); err == nil {
+		t.Fatal("expected restore to reject path outside project root")
+	}
+	if _, err := os.Stat(outsideFile); err != nil {
+		t.Fatalf("expected outside file to remain untouched: %v", err)
+	}
+}
+
 func findEntry(backup *ProjectBackup, target string) (backupEntry, bool) {
 	for _, entry := range backup.entries {
 		if entry.Path == target {

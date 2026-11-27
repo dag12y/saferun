@@ -87,3 +87,21 @@ func TestAnalyzeAccumulatesMultipleFindings(t *testing.T) {
 		t.Fatalf("expected CRITICAL, got %s", report.Level)
 	}
 }
+
+func TestAnalyzeAccumulatesScoreAcrossMultipleCriticalFindings(t *testing.T) {
+	report := Analyze([]Finding{
+		{Name: "crit one", Severity: Critical},
+		{Name: "medium one", Severity: Medium},
+		{Name: "crit two", Severity: Critical},
+	})
+
+	if report.Level != Critical {
+		t.Fatalf("expected CRITICAL, got %s", report.Level)
+	}
+	if report.Score != 45 {
+		t.Fatalf("expected total score 45, got %d", report.Score)
+	}
+	if report.FindingCount != 3 {
+		t.Fatalf("expected 3 findings, got %d", report.FindingCount)
+	}
+}

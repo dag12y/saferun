@@ -175,3 +175,52 @@ func TestInstallationVerifierLocalPackage(t *testing.T) {
 		t.Fatalf("expected local package name local-pkg, got %q", result.Packages[0].Name)
 	}
 }
+
+func TestInstallationVerifierSemverRangeAndDistTag(t *testing.T) {
+	projectDir := t.TempDir()
+	writeJSON(t, filepath.Join(projectDir, "package.json"), map[string]any{
+		"name": "demo",
+		"dependencies": map[string]string{
+			"lodash": "^4.17.21",
+			"chalk":  "^5.0.0",
+		},
+	})
+	writeJSON(t, filepath.Join(projectDir, "node_modules", "lodash", "package.json"), map[string]any{
+		"name":    "lodash",
+		"version": "4.17.21",
+	})
+	writeJSON(t, filepath.Join(projectDir, "node_modules", "chalk", "package.json"), map[string]any{
+		"name":    "chalk",
+		"version": "5.3.0",
+	})
+
+	verifier := InstallationVerifier{ProjectDir: projectDir}
+	result, err := verifier.Verify([]string{"lodash@^4.17.0", "chalk@latest"}, nil)
+	if err != nil {
+		t.Fatalf("Verify returned unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("expected verification success for semver range and dist-tag, got errors: %v", result.Errors)
+	}
+}
+
+func TestInstallationVerifierSemverRangeMismatch(t *testing.T) {
+	projectDir := t.TempDir()
+	writeJSON(t, filepath.Join(projectDir, "package.json"), map[string]any{
+		"name":         "demo",
+		"dependencies": map[string]string{"lodash": "^5.0.0"},
+	})
+	writeJSON(t, filepath.Join(projectDir, "node_modules", "lodash", "package.json"), map[string]any{
+		"name":    "lodash",
+		"version": "4.17.21",
+	})
+
+	verifier := InstallationVerifier{ProjectDir: projectDir}
+	result, err := verifier.Verify([]string{"lodash@^5.0.0"}, nil)
+	if err == nil {
+		t.Fatal("expected semver range mismatch to fail verification")
+	}
+	if result.Success {
+		t.Fatal("expected failed verification for semver range mismatch")
+	}
+}

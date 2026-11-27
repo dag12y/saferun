@@ -15,10 +15,16 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/dag12y/saferun/internal/semver"
 )
 
+const defaultHTTPTimeout = 30 * time.Second
+
 type NPMRegistry struct {
-	BaseURL string
+	BaseURL    string
+	HTTPClient *http.Client
 }
 
 type PackageInfo struct {
@@ -28,10 +34,23 @@ type PackageInfo struct {
 	Integrity  string
 }
 
-func (r NPMRegistry) Resolve(name string) (PackageInfo, error) {
-	packageURL := r.BaseURL + "/" + url.PathEscape(name)
+func (r NPMRegistry) client() *http.Client {
+	if r.HTTPClient != nil {
+		return r.HTTPClient
+	}
+	return &http.Client{Timeout: defaultHTTPTimeout}
+}
 
-	resp, err := http.Get(packageURL)
+func (r NPMRegistry) Resolve(spec string) (PackageInfo, error) {
+	name, requested, err := parsePackageSpec(spec)
+	if err != nil {
+		return PackageInfo{}, err
+	}
+
+	baseURL := strings.TrimRight(r.BaseURL, "/")
+	packageURL := baseURL + "/" + escapeRegistryPackageName(name)
+
+	resp, err := r.client().Get(packageURL)
 	if err != nil {
 		return PackageInfo{}, fmt.Errorf("fetch package metadata: %w", err)
 	}
@@ -45,9 +64,7 @@ func (r NPMRegistry) Resolve(name string) (PackageInfo, error) {
 	}
 
 	var metadata struct {
-		DistTags struct {
-			Latest string `json:"latest"`
-		} `json:"dist-tags"`
+		DistTags map[string]string `json:"dist-tags"`
 
 		Versions map[string]struct {
 			Dist struct {
@@ -61,13 +78,35 @@ func (r NPMRegistry) Resolve(name string) (PackageInfo, error) {
 		return PackageInfo{}, fmt.Errorf("decode package metadata: %w", err)
 	}
 
-	version := metadata.DistTags.Latest
+	if requested == "" {
+		requested = "latest"
+	}
+
+	version := ""
+	if tagVersion, ok := metadata.DistTags[requested]; ok {
+		version = tagVersion
+	} else if _, ok := metadata.Versions[requested]; ok {
+		version = requested
+	} else if semver.IsRangeOrVersion(requested) {
+		available := make([]string, 0, len(metadata.Versions))
+		for v := range metadata.Versions {
+			available = append(available, v)
+		}
+		matched, matchErr := semver.MaxSatisfying(available, requested)
+		if matchErr != nil {
+			return PackageInfo{}, fmt.Errorf("version %s for %s not found: %w", requested, name, matchErr)
+		}
+		version = matched
+	} else {
+		return PackageInfo{}, fmt.Errorf("version or tag %s not found for %s", requested, name)
+	}
 
 	versionInfo, exists := metadata.Versions[version]
 	if !exists {
 		return PackageInfo{}, fmt.Errorf(
-			"latest version %s not found",
+			"version %s not found for %s",
 			version,
+			name,
 		)
 	}
 
@@ -79,8 +118,53 @@ func (r NPMRegistry) Resolve(name string) (PackageInfo, error) {
 	}, nil
 }
 
+func parsePackageSpec(spec string) (string, string, error) {
+	trimmed := strings.TrimSpace(spec)
+	if trimmed == "" {
+		return "", "", fmt.Errorf("empty package specifier")
+	}
+
+	if strings.HasPrefix(trimmed, "@") {
+		slash := strings.IndexByte(trimmed, '/')
+		if slash <= 1 || slash == len(trimmed)-1 {
+			return "", "", fmt.Errorf("invalid scoped package specifier %q", spec)
+		}
+		at := strings.LastIndexByte(trimmed, '@')
+		if at > slash {
+			name := trimmed[:at]
+			req := trimmed[at+1:]
+			if req == "" {
+				return "", "", fmt.Errorf("invalid package specifier %q", spec)
+			}
+			return name, req, nil
+		}
+		return trimmed, "", nil
+	}
+
+	at := strings.LastIndexByte(trimmed, '@')
+	if at == 0 {
+		return "", "", fmt.Errorf("invalid package specifier %q", spec)
+	}
+	if at > 0 {
+		name := trimmed[:at]
+		req := trimmed[at+1:]
+		if req == "" {
+			return "", "", fmt.Errorf("invalid package specifier %q", spec)
+		}
+		return name, req, nil
+	}
+	return trimmed, "", nil
+}
+
+func escapeRegistryPackageName(name string) string {
+	if strings.HasPrefix(name, "@") {
+		return "@" + url.PathEscape(name[1:])
+	}
+	return url.PathEscape(name)
+}
+
 func (r NPMRegistry) Download(pkg PackageInfo) (string, error) {
-	resp, err := http.Get(pkg.TarballURL)
+	resp, err := r.client().Get(pkg.TarballURL)
 	if err != nil {
 		return "", fmt.Errorf("download package: %w", err)
 	}

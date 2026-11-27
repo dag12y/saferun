@@ -46,20 +46,21 @@ func Analyze(findings []Finding) Report {
 	})
 
 	total := 0
+	hasCritical := false
 	for _, finding := range sorted {
 		total += scoreForSeverity(finding.Severity)
 		if finding.Severity == Critical {
-			return Report{
-				Level:        Critical,
-				Score:        total,
-				FindingCount: len(sorted),
-				Findings:     sorted,
-			}
+			hasCritical = true
 		}
 	}
 
+	level := levelFromScore(total)
+	if hasCritical {
+		level = Critical
+	}
+
 	return Report{
-		Level:        levelFromScore(total),
+		Level:        level,
 		Score:        total,
 		FindingCount: len(sorted),
 		Findings:     sorted,

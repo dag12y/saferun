@@ -98,7 +98,7 @@ func (b *ProjectBackup) Restore() error {
 	}
 	var errs []string
 	for _, entry := range b.entries {
-		if err := restoreEntry(entry); err != nil {
+		if err := b.restoreEntry(entry); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -170,15 +170,15 @@ func capturePath(projectDir, backupDir, target string) (backupEntry, error) {
 	return entry, nil
 }
 
-func restoreEntry(entry backupEntry) error {
+func (b *ProjectBackup) restoreEntry(entry backupEntry) error {
+	if err := ensureInsideProject(b.ProjectDir, entry.Path); err != nil {
+		return err
+	}
 	if !entry.Existed {
 		if err := os.RemoveAll(entry.Path); err != nil {
 			return fmt.Errorf("remove newly created path %q: %w", entry.Path, err)
 		}
 		return nil
-	}
-	if err := ensureInsideProject(filepath.Dir(entry.Path), entry.Path); err != nil {
-		return err
 	}
 	if err := os.RemoveAll(entry.Path); err != nil {
 		return fmt.Errorf("clear path %q before restore: %w", entry.Path, err)
