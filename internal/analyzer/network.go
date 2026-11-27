@@ -158,13 +158,19 @@ func connectionIdentity(connection NetworkConnection) string {
 }
 
 func AnalyzeNetworkConnections(connections []NetworkConnection) []risk.Finding {
+	return AnalyzeNetworkConnectionsWithAllowed(connections, nil)
+}
+
+// AnalyzeNetworkConnectionsWithAllowed inspects deduplicated network connections
+// and ignores localhost, npm registry endpoints, and any configured allowedHosts.
+func AnalyzeNetworkConnectionsWithAllowed(connections []NetworkConnection, allowedHosts []string) []risk.Finding {
 	var findings []risk.Finding
 	for _, connection := range DeduplicateNetworkConnections(connections) {
 		host, port := normalizeConnection(connection)
 		if host == "" || isLocalHost(host) {
 			continue
 		}
-		if isExpectedNetworkHost(host) || isExpectedNPMRegistryIP(host, port) {
+		if isExpectedNetworkHost(host) || isExpectedNPMRegistryIP(host, port) || matchesAllowedHost(host, allowedHosts) {
 			continue
 		}
 
@@ -176,6 +182,23 @@ func AnalyzeNetworkConnections(connections []NetworkConnection) []risk.Finding {
 	}
 
 	return findings
+}
+
+func matchesAllowedHost(host string, allowedHosts []string) bool {
+	lowerHost := strings.ToLower(strings.TrimSpace(host))
+	for _, pattern := range allowedHosts {
+		p := strings.ToLower(strings.TrimSpace(pattern))
+		if p == "" {
+			continue
+		}
+		if p == lowerHost {
+			return true
+		}
+		if strings.HasPrefix(p, "*.") && strings.HasSuffix(lowerHost, p[1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 func ExpectedRegistryConnections(connections []NetworkConnection) []string {

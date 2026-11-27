@@ -18,10 +18,11 @@ Commands:
   help        Show help information
 
 Options:
-    -h, --help     Show help
-      --version  Show version information
-      --json     Output security report as JSON
-  audit --all    Show all audit events
-  audit --clear  Clear audit history
+    -h, --help         Show help
+      --version        Show version information
+      --json           Output security report as JSON
+      --format=<fmt>   Output format (json, sarif)
+  audit --all          Show all audit events
+  audit --clear        Clear audit history
 `, version)
 }

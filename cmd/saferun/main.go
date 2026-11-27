@@ -35,7 +35,7 @@ func main() {
 		return
 	}
 
-	if !command.JSON {
+	if !command.JSON && command.Format == "" {
 		fmt.Println("SafeRun")
 		fmt.Println("Secure package installation sandbox")
 		fmt.Println()
@@ -156,15 +156,20 @@ func main() {
 			Registry: registry.NPMRegistry{
 				BaseURL: "https://registry.npmjs.org",
 			},
-			JSON: command.JSON,
+			JSON:   command.JSON,
+			Format: command.Format,
 		}
 
 		if err := manager.Install(command.Arguments); err != nil {
-			if command.JSON {
+			if command.JSON || command.Format == "sarif" {
 				if strings.HasPrefix(err.Error(), "security policy blocks installation:") {
 					os.Exit(1)
 				}
-				writeJSONError(err)
+				if command.JSON {
+					writeJSONError(err)
+				} else {
+					fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				}
 				os.Exit(1)
 			}
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)

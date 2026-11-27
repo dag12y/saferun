@@ -1,0 +1,59 @@
+name: "SafeRun Package Security Check"
+description: "Analyze npm packages or project dependencies in a SafeRun sandbox and optionally upload SARIF results."
+inputs:
+  packages:
+    description: "Space-separated npm package specs to analyze (leave empty for project mode)"
+    required: false
+    default: ""
+  sarif-file:
+    description: "Path to write SARIF output"
+    required: false
+    default: "saferun.sarif"
+  upload-sarif:
+    description: "Upload SARIF report to GitHub Code Scanning"
+    required: false
+    default: "true"
+  saferun-version:
+    description: "SafeRun release version to install"
+    required: false
+    default: "v1.0.6"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install SafeRun
+      shell: bash
+      env:
+        SAFERUN_VERSION: ${{ inputs.saferun-version }}
+      run: |
+        curl -fsSL https://www.saferun.tech/install.sh | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Prepare SafeRun Sandbox
+      shell: bash
+      run: saferun setup
+
+    - name: Run SafeRun Analysis
+      id: analyze
+      shell: bash
+      continue-on-error: true
+      run: |
+        set -o pipefail
+        if [ -n "${{ inputs.packages }}" ]; then
+          saferun npm install ${{ inputs.packages }} --format=sarif > "${{ inputs.sarif-file }}"
+        else
+          saferun npm install --format=sarif > "${{ inputs.sarif-file }}"
+        fi
+
+    - name: Upload SARIF to GitHub Security
+      if: ${{ inputs.upload-sarif == 'true' && always() && hashFiles(inputs.sarif-file) != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+
+    - name: Fail on Policy Block
+      if: ${{ steps.analyze.outcome == 'failure' }}
+      shell: bash
+      run: |
+        echo "SafeRun security policy blocked the installation."
+        exit 1

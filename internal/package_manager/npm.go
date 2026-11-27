@@ -12,6 +12,8 @@ import (
 	"github.com/dag12y/saferun/internal/analyzer"
 	"github.com/dag12y/saferun/internal/audit"
 	"github.com/dag12y/saferun/internal/cli"
+	"github.com/dag12y/saferun/internal/config"
+	"github.com/dag12y/saferun/internal/osv"
 	"github.com/dag12y/saferun/internal/policy"
 	"github.com/dag12y/saferun/internal/prompt"
 	"github.com/dag12y/saferun/internal/registry"
@@ -19,19 +21,24 @@ import (
 	"github.com/dag12y/saferun/internal/risk"
 	"github.com/dag12y/saferun/internal/sandbox"
 	"github.com/dag12y/saferun/internal/setup"
+	"github.com/dag12y/saferun/internal/version"
 )
 
 type NPM struct {
-	Sandbox       sandbox.Config
-	Registry      registry.NPMRegistry
-	ProjectDir    string
-	AuditLogger   audit.Logger
-	ResolveFunc   func(string) (registry.PackageInfo, error)
-	DownloadFunc  func(registry.PackageInfo) (string, error)
-	SandboxRunner func(sandbox.Config, ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error)
-	RealInstaller func([]string) error
-	Prompt        func(string) bool
-	JSON          bool
+	Sandbox        sandbox.Config
+	Registry       registry.NPMRegistry
+	ProjectDir     string
+	AuditLogger    audit.Logger
+	ResolveFunc    func(string) (registry.PackageInfo, error)
+	DownloadFunc   func(registry.PackageInfo) (string, error)
+	CheckVulnsFunc func(string, string) ([]risk.Finding, error)
+	SandboxRunner  func(sandbox.Config, ...string) (analyzer.FileChanges, []analyzer.ProcessFinding, []analyzer.NetworkConnection, error)
+	RealInstaller  func([]string) error
+	Prompt         func(string) bool
+	JSON           bool
+	Format         string
+	AllowedHosts   []string
+	BlockOnMedium  bool
 }
 
 func DefaultNPMInstaller(args []string) error {
@@ -177,12 +184,39 @@ func (f outputFormatter) Print(args ...any) (int, error) {
 }
 
 func (n NPM) Install(args []string) error {
+	machineOutput := n.JSON || n.Format == "json" || n.Format == "sarif"
 	output := io.Writer(os.Stdout)
-	if n.JSON {
+	if machineOutput {
 		output = io.Discard
 	}
 	fmt := outputFormatter{Writer: output}
 	n.Sandbox.Output = output
+
+	userCfg, cfgErr := config.Load(n.ProjectDir)
+	if cfgErr != nil {
+		return cfgErr
+	}
+	if userCfg.Sandbox.Memory != "" {
+		n.Sandbox.Memory = userCfg.Sandbox.Memory
+	}
+	if userCfg.Sandbox.CPUs != "" {
+		n.Sandbox.CPUs = userCfg.Sandbox.CPUs
+	}
+	if userCfg.Sandbox.PidsLimit > 0 {
+		n.Sandbox.PidsLimit = userCfg.Sandbox.PidsLimit
+	}
+	if d, err := userCfg.ParseTimeout(); err == nil && d > 0 {
+		n.Sandbox.Timeout = d
+	}
+	if userCfg.Sandbox.Image != "" {
+		n.Sandbox.Image = userCfg.Sandbox.Image
+	}
+	if len(userCfg.Network.AllowedHosts) > 0 {
+		n.AllowedHosts = append(append([]string(nil), n.AllowedHosts...), userCfg.Network.AllowedHosts...)
+	}
+	if userCfg.Policy.BlockOnMedium {
+		n.BlockOnMedium = true
+	}
 
 	if n.Sandbox.Image == "" {
 		n.Sandbox.Image = sandbox.DefaultImage
@@ -369,6 +403,27 @@ func (n NPM) Install(args []string) error {
 				Severity:    risk.Level(finding.Severity),
 			})
 		}
+
+		if userCfg.OSVEnabled() && report.Package.Name != "" && report.Package.Version != "" {
+			vulnCheck := n.CheckVulnsFunc
+			if vulnCheck == nil && n.ResolveFunc == nil {
+				osvClient := osv.DefaultClient()
+				vulnCheck = func(pkgName, pkgVer string) ([]risk.Finding, error) {
+					vulns, err := osvClient.QueryPackage(pkgName, pkgVer)
+					if err != nil {
+						return nil, err
+					}
+					return osv.ToRiskFindings(pkgName, pkgVer, vulns), nil
+				}
+			}
+			if vulnCheck != nil {
+				vulnFindings, vulnErr := vulnCheck(report.Package.Name, report.Package.Version)
+				if vulnErr == nil {
+					packageFindings = append(packageFindings, vulnFindings...)
+				}
+			}
+		}
+
 		report.Findings = packageFindings
 		allFindings = append(allFindings, packageFindings...)
 		packageReports = append(packageReports, report)
@@ -402,7 +457,8 @@ func (n NPM) Install(args []string) error {
 			Severity:    risk.Level(finding.Severity),
 		})
 	}
-	for _, finding := range analyzer.AnalyzeNetworkConnections(networkConnections) {
+	networkFindings := analyzer.AnalyzeNetworkConnectionsWithAllowed(networkConnections, n.AllowedHosts)
+	for _, finding := range networkFindings {
 		allFindings = append(allFindings, finding)
 	}
 
@@ -449,14 +505,14 @@ func (n NPM) Install(args []string) error {
 			fmt.Println(cli.Success(fmt.Sprintf("  ✓ %s", destination)))
 		}
 	}
-	if len(analyzer.AnalyzeNetworkConnections(networkConnections)) == 0 && len(expectedConnections) == 0 {
+	if len(networkFindings) == 0 && len(expectedConnections) == 0 {
 		fmt.Println(cli.Success("  ✓ No unexpected network connections detected"))
 	} else {
-		for _, finding := range analyzer.AnalyzeNetworkConnections(networkConnections) {
+		for _, finding := range networkFindings {
 			fmt.Println(cli.Severity(string(finding.Severity), fmt.Sprintf("  ⚠ %s [%s]: %s", finding.Name, finding.Severity, finding.Description)))
 		}
 	}
-	if len(expectedConnections) > 0 && len(analyzer.AnalyzeNetworkConnections(networkConnections)) == 0 {
+	if len(expectedConnections) > 0 && len(networkFindings) == 0 {
 		fmt.Println(cli.Success("  ✓ Registry traffic was allowed"))
 	}
 
@@ -514,8 +570,29 @@ func (n NPM) Install(args []string) error {
 	fmt.Printf("\n%s\n", cli.Risk(string(result.Level), fmt.Sprintf("Risk: %s", result.Level)))
 
 	decision, reason, policyErr := policy.Evaluate(result)
+	if n.BlockOnMedium && decision == policy.RequireConfirmation {
+		decision = policy.Block
+		reason = "Medium-risk behavior blocked by policy configuration."
+	}
 	decisionStatus := toAuditDecision(decision)
-	if n.JSON {
+	if n.Format == "sarif" {
+		if policyErr != nil {
+			return fmt.Errorf("security policy evaluation failed: %w", policyErr)
+		}
+		artifactURI := "package.json"
+		if _, err := os.Stat(filepath.Join(projectDir, "package-lock.json")); err == nil {
+			artifactURI = "package-lock.json"
+		}
+		sarifReport := report.NewSARIFReport(version.Version, artifactURI, result)
+		if err := json.NewEncoder(os.Stdout).Encode(sarifReport); err != nil {
+			return fmt.Errorf("encode SARIF report: %w", err)
+		}
+		if decision != policy.Allow {
+			return fmt.Errorf("security policy blocks installation: %s", reason)
+		}
+		return nil
+	}
+	if n.JSON || n.Format == "json" {
 		if projectMode {
 			projectPackages := make([]report.ProjectPackageInput, 0, len(packageReports))
 			for _, pkg := range packageReports {

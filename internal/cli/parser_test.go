@@ -87,6 +87,28 @@ func TestParseNPMInstallAliases(t *testing.T) {
 	}
 }
 
+func TestParseFormatFlag(t *testing.T) {
+	cmd, err := Parse([]string{"npm", "install", "lodash", "--format=sarif"})
+	if err != nil {
+		t.Fatalf("Parse(--format=sarif) returned error: %v", err)
+	}
+	if cmd.Format != "sarif" || cmd.JSON {
+		t.Fatalf("expected Format=sarif and JSON=false, got %#v", cmd)
+	}
+
+	cmdJSON, err := Parse([]string{"npm", "install", "lodash", "--format", "json"})
+	if err != nil {
+		t.Fatalf("Parse(--format json) returned error: %v", err)
+	}
+	if cmdJSON.Format != "json" || !cmdJSON.JSON {
+		t.Fatalf("expected Format=json and JSON=true, got %#v", cmdJSON)
+	}
+
+	if _, err := Parse([]string{"npm", "install", "lodash", "--format=xml"}); err == nil {
+		t.Fatal("expected error for unsupported format")
+	}
+}
+
 func TestHelpText(t *testing.T) {
 	help := HelpText("v1.0.3-test")
 	for _, expected := range []string{"SafeRun v1.0.3-test", "Usage:", "--help", "setup", "npm", "audit", "version"} {
