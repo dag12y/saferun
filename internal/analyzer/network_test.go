@@ -154,3 +154,19 @@ func TestParseNetworkConnections(t *testing.T) {
 		}
 	}
 }
+
+func TestParseNetworkConnectionsIPv6(t *testing.T) {
+	raw := `  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:0000 B80D0120000000000000000001000000:01BB 01 00000000:00000000 00:00000000 00000000 1000 0 1234
+   1: 00000000000000000000000000000000:0000 0000000000000000FFFF00000100000A:01BB 01 00000000:00000000 00:00000000 00000000 1000 0 1235`
+	connections := ParseNetworkConnections(raw)
+	if len(connections) != 2 {
+		t.Fatalf("expected 2 IPv6 connections, got %#v", connections)
+	}
+	if connections[0].Destination != "2001:db8::1" || connections[0].Port != 443 {
+		t.Fatalf("unexpected first IPv6 connection: %#v", connections[0])
+	}
+	if connections[1].Destination != "10.0.0.1" || connections[1].Port != 443 {
+		t.Fatalf("unexpected IPv4-mapped IPv6 connection: %#v", connections[1])
+	}
+}

@@ -103,7 +103,7 @@ func Run(config Config, command ...string) (analyzer.FileChanges, []analyzer.Pro
 		containerName,
 		"sh",
 		"-c",
-		`rm -f /tmp/saferun-network.log; while true; do { cat /proc/net/tcp 2>/dev/null; echo '---'; cat /proc/net/tcp6 2>/dev/null; } >> /tmp/saferun-network.log; sleep 0.5; done & echo $! >/tmp/saferun-network.pid`,
+		`rm -f /tmp/saferun-network.log /tmp/saferun-process.log; while true; do { cat /proc/net/tcp 2>/dev/null; echo '---'; cat /proc/net/tcp6 2>/dev/null; } >> /tmp/saferun-network.log; for proc in /proc/[0-9]*/cmdline; do [ -r "$proc" ] || continue; tr '\0' ' ' < "$proc"; echo; done >> /tmp/saferun-process.log 2>/dev/null; sleep 0.1; done & echo $! >/tmp/saferun-network.pid`,
 	)
 	if output, err := monitorCmd.CombinedOutput(); err != nil {
 		return analyzer.FileChanges{}, nil, nil, fmt.Errorf("start sandbox network monitor: %w: %s", err, string(output))
@@ -186,12 +186,20 @@ func buildDockerExecArgs(containerName string, command []string) []string {
 
 func prepareLocalPackageInSandbox(workspace string, command []string) ([]string, error) {
 	updated := append([]string(nil), command...)
-	for i := 0; i < len(updated)-1; i++ {
-		if updated[i] != "install" {
-			continue
+	installIdx := -1
+	for i, arg := range updated {
+		if arg == "install" {
+			installIdx = i
+			break
 		}
-		packageSpec := updated[i+1]
-		if packageSpec == "" || !looksLikeLocalPath(packageSpec) {
+	}
+	if installIdx == -1 {
+		return updated, nil
+	}
+
+	for i := installIdx + 1; i < len(updated); i++ {
+		packageSpec := updated[i]
+		if packageSpec == "" || strings.HasPrefix(packageSpec, "-") || !looksLikeLocalPath(packageSpec) {
 			continue
 		}
 
@@ -206,7 +214,7 @@ func prepareLocalPackageInSandbox(workspace string, command []string) ([]string,
 			return nil, fmt.Errorf("copy local package %q to sandbox workspace: %w", packageSpec, err)
 		}
 
-		updated[i+1] = filepath.ToSlash(filepath.Join("/saferun/workspace", packageName))
+		updated[i] = filepath.ToSlash(filepath.Join("/saferun/workspace", packageName))
 	}
 	return updated, nil
 }

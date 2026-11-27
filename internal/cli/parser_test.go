@@ -67,6 +67,26 @@ func TestParseProjectInstall(t *testing.T) {
 	}
 }
 
+func TestParseNPMInstallAliases(t *testing.T) {
+	for _, alias := range []string{"install", "i", "add"} {
+		cmd, err := Parse([]string{"npm", alias, "lodash"})
+		if err != nil {
+			t.Fatalf("Parse(npm %s lodash) returned error: %v", alias, err)
+		}
+		if cmd.Operation != "install" {
+			t.Fatalf("expected operation 'install' for alias %q, got %q", alias, cmd.Operation)
+		}
+
+		projCmd, err := Parse([]string{"npm", alias})
+		if err != nil {
+			t.Fatalf("Parse(npm %s) returned error: %v", alias, err)
+		}
+		if projCmd.Operation != "install" {
+			t.Fatalf("expected project operation 'install' for alias %q, got %q", alias, projCmd.Operation)
+		}
+	}
+}
+
 func TestHelpText(t *testing.T) {
 	help := HelpText("v1.0.3-test")
 	for _, expected := range []string{"SafeRun v1.0.3-test", "Usage:", "--help", "setup", "npm", "audit", "version"} {

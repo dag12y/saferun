@@ -3,6 +3,7 @@ package sandbox
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -31,7 +32,7 @@ func DefaultConfig() Config {
 		Network:   "bridge",
 		Memory:    "512m",
 		CPUs:      "1",
-		Workspace: "/tmp/saferun-workspace",
+		Workspace: filepath.Join(os.TempDir(), "saferun-workspace"),
 		PidsLimit: 128,
 		Timeout:   5 * time.Minute,
 		Output:    os.Stdout,

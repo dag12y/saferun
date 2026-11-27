@@ -76,12 +76,41 @@ func parseRemoteSocket(value string) (string, int, bool) {
 		return "", 0, false
 	}
 
-	ip, ok := parseHexIPv4(parts[0])
-	if !ok {
+	switch len(parts[0]) {
+	case 8:
+		ip, ok := parseHexIPv4(parts[0])
+		if !ok {
+			return "", 0, false
+		}
+		return ip, int(port), true
+	case 32:
+		ip, ok := parseHexIPv6(parts[0])
+		if !ok {
+			return "", 0, false
+		}
+		return ip, int(port), true
+	default:
 		return "", 0, false
 	}
+}
 
-	return ip, int(port), true
+func parseHexIPv6(value string) (string, bool) {
+	if len(value) != 32 {
+		return "", false
+	}
+	var ipBytes [16]byte
+	for word := 0; word < 4; word++ {
+		base := word * 8
+		for b := 0; b < 4; b++ {
+			hexByte := value[base+(3-b)*2 : base+(3-b)*2+2]
+			v, err := strconv.ParseUint(hexByte, 16, 8)
+			if err != nil {
+				return "", false
+			}
+			ipBytes[word*4+b] = byte(v)
+		}
+	}
+	return net.IP(ipBytes[:]).String(), true
 }
 
 func parseHexIPv4(value string) (string, bool) {

@@ -22,7 +22,7 @@ func AnalyzeProcesses(containerID string) ([]ProcessFinding, error) {
 		containerID,
 		"sh",
 		"-c",
-		`for proc in /proc/[0-9]*/cmdline; do [ -r "$proc" ] || continue; tr '\0' ' ' < "$proc"; echo; done`,
+		`if [ -s /tmp/saferun-process.log ]; then cat /tmp/saferun-process.log; else for proc in /proc/[0-9]*/cmdline; do [ -r "$proc" ] || continue; tr '\0' ' ' < "$proc"; echo; done; fi`,
 	)
 
 	output, err := cmd.CombinedOutput()
@@ -30,7 +30,22 @@ func AnalyzeProcesses(containerID string) ([]ProcessFinding, error) {
 		return nil, fmt.Errorf("inspect sandbox processes: %w", err)
 	}
 
-	return AnalyzeProcessOutput(string(output)), nil
+	return DeduplicateProcessFindings(AnalyzeProcessOutput(string(output))), nil
+}
+
+// DeduplicateProcessFindings removes duplicate process findings while preserving order.
+func DeduplicateProcessFindings(findings []ProcessFinding) []ProcessFinding {
+	seen := make(map[string]struct{}, len(findings))
+	unique := make([]ProcessFinding, 0, len(findings))
+	for _, f := range findings {
+		key := strings.ToLower(f.Command) + "|" + f.Severity + "|" + f.Reason
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, f)
+	}
+	return unique
 }
 
 func AnalyzeProcRoot(root string) ([]ProcessFinding, error) {

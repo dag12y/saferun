@@ -56,3 +56,14 @@ func TestAnalyzeProcessOutputDoesNotFlagOrdinaryInstallShells(t *testing.T) {
 		t.Fatalf("expected ordinary install processes to stay clean, got %#v", findings)
 	}
 }
+
+func TestDeduplicateProcessFindings(t *testing.T) {
+	findings := DeduplicateProcessFindings([]ProcessFinding{
+		{Command: "curl", Severity: "HIGH", Reason: "Network download utility executed"},
+		{Command: "curl", Severity: "HIGH", Reason: "Network download utility executed"},
+		{Command: "wget", Severity: "HIGH", Reason: "Network download utility executed"},
+	})
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 deduplicated findings, got %#v", findings)
+	}
+}

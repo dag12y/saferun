@@ -41,3 +41,30 @@ func TestSnapshotAndCompare(t *testing.T) {
 		)
 	}
 }
+
+func TestCompareSnapshotsDetectsSameSizeModification(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "config.js")
+	if err := os.WriteFile(file, []byte("aaaa"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := SnapshotDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(file, []byte("bbbb"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := SnapshotDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changes := CompareSnapshots(before, after)
+	if len(changes.Modified) != 1 || changes.Modified[0].Path != "config.js" {
+		t.Fatalf("expected same-size modification of config.js to be detected, got %#v", changes.Modified)
+	}
+}

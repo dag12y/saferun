@@ -1,6 +1,9 @@
 package analyzer
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 type BehaviorFinding struct {
 	Path        string
@@ -8,31 +11,47 @@ type BehaviorFinding struct {
 	Severity    string
 }
 
+func normalizeBehaviorPath(p string) string {
+	return strings.ToLower(strings.ReplaceAll(filepath.ToSlash(p), `\`, "/"))
+}
+
+func isIgnoredInstallPath(normalizedPath string) bool {
+	return strings.HasPrefix(normalizedPath, "node_modules/") ||
+		normalizedPath == "package.json" ||
+		normalizedPath == "package-lock.json"
+}
+
+func isSensitivePath(normalizedPath string) (string, bool) {
+	if strings.Contains(normalizedPath, ".ssh") {
+		return "Attempted access to SSH files", true
+	}
+	if strings.Contains(normalizedPath, ".aws") {
+		return "Attempted access to AWS credentials", true
+	}
+	if strings.Contains(normalizedPath, ".env") {
+		return "Attempted access to environment file", true
+	}
+	if strings.HasPrefix(normalizedPath, ".git/") || strings.Contains(normalizedPath, "/.git/") {
+		return "Attempted access to Git metadata", true
+	}
+	return "", false
+}
+
 func AnalyzeFileChanges(changes FileChanges) []BehaviorFinding {
 	var findings []BehaviorFinding
 
 	for _, file := range changes.Created {
+		path := normalizeBehaviorPath(file.Path)
 
-		path := strings.ToLower(file.Path)
-
-		// Ignore normal npm installation files
+		// Ignore normal npm installation files.
 		if strings.HasPrefix(path, "node_modules/") {
 			continue
 		}
 
-		if strings.Contains(path, ".ssh") {
+		if desc, ok := isSensitivePath(path); ok {
 			findings = append(findings, BehaviorFinding{
 				Path:        file.Path,
-				Description: "Attempted access to SSH files",
-				Severity:    "HIGH",
-			})
-			continue
-		}
-
-		if strings.Contains(path, ".aws") {
-			findings = append(findings, BehaviorFinding{
-				Path:        file.Path,
-				Description: "Attempted access to AWS credentials",
+				Description: desc,
 				Severity:    "HIGH",
 			})
 			continue
@@ -54,6 +73,46 @@ func AnalyzeFileChanges(changes FileChanges) []BehaviorFinding {
 				Severity:    "MEDIUM",
 			})
 		}
+	}
+
+	for _, file := range changes.Modified {
+		path := normalizeBehaviorPath(file.Path)
+		if isIgnoredInstallPath(path) {
+			continue
+		}
+		if desc, ok := isSensitivePath(path); ok {
+			findings = append(findings, BehaviorFinding{
+				Path:        file.Path,
+				Description: desc,
+				Severity:    "HIGH",
+			})
+			continue
+		}
+		findings = append(findings, BehaviorFinding{
+			Path:        file.Path,
+			Description: "Modified existing project file",
+			Severity:    "MEDIUM",
+		})
+	}
+
+	for _, file := range changes.Deleted {
+		path := normalizeBehaviorPath(file.Path)
+		if isIgnoredInstallPath(path) {
+			continue
+		}
+		if desc, ok := isSensitivePath(path); ok {
+			findings = append(findings, BehaviorFinding{
+				Path:        file.Path,
+				Description: desc,
+				Severity:    "HIGH",
+			})
+			continue
+		}
+		findings = append(findings, BehaviorFinding{
+			Path:        file.Path,
+			Description: "Deleted existing project file",
+			Severity:    "MEDIUM",
+		})
 	}
 
 	return findings

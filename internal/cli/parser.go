@@ -46,7 +46,7 @@ func Parse(args []string) (Command, error) {
 		if args[0] == "audit" && (args[1] == "--all" || args[1] == "--clear") {
 			return Command{PackageManager: "audit", Operation: "audit", Arguments: []string{args[1]}, JSON: jsonOutput}, nil
 		}
-		if args[0] == "npm" && args[1] == "install" {
+		if args[0] == "npm" && isNPMInstallAlias(args[1]) {
 			return Command{PackageManager: "npm", Operation: "install", JSON: jsonOutput}, nil
 		}
 	}
@@ -60,10 +60,19 @@ func Parse(args []string) (Command, error) {
 		return Command{JSON: jsonOutput}, fmt.Errorf("usage: saferun <package-manager> <operation> [package] [options]\n\nExample: saferun npm install express --save")
 	}
 
+	operation := args[1]
+	if args[0] == "npm" && isNPMInstallAlias(operation) {
+		operation = "install"
+	}
+
 	return Command{
 		PackageManager: args[0],
-		Operation:      args[1],
+		Operation:      operation,
 		Arguments:      args[2:],
 		JSON:           jsonOutput,
 	}, nil
+}
+
+func isNPMInstallAlias(op string) bool {
+	return op == "install" || op == "i" || op == "add"
 }

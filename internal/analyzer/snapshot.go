@@ -1,7 +1,9 @@
 package analyzer
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -10,6 +12,7 @@ type FileSnapshot struct {
 	Path string
 	Size int64
 	Mode os.FileMode
+	Hash [32]byte
 }
 
 func SnapshotDirectory(root string) (map[string]FileSnapshot, error) {
@@ -28,11 +31,22 @@ func SnapshotDirectory(root string) (map[string]FileSnapshot, error) {
 		if err != nil {
 			return fmt.Errorf("get relative path: %w", err)
 		}
+		relativePath = filepath.ToSlash(relativePath)
+
+		var hash [32]byte
+		if info.Mode().IsRegular() {
+			fileHash, hashErr := hashFile(path)
+			if hashErr != nil {
+				return fmt.Errorf("hash file %q: %w", relativePath, hashErr)
+			}
+			hash = fileHash
+		}
 
 		snapshot[relativePath] = FileSnapshot{
 			Path: relativePath,
 			Size: info.Size(),
 			Mode: info.Mode(),
+			Hash: hash,
 		}
 
 		return nil
@@ -43,6 +57,22 @@ func SnapshotDirectory(root string) (map[string]FileSnapshot, error) {
 	}
 
 	return snapshot, nil
+}
+
+func hashFile(path string) ([32]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return [32]byte{}, err
+	}
+	var sum [32]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
 }
 
 type FileChanges struct {
@@ -66,7 +96,8 @@ func CompareSnapshots(
 		}
 
 		if beforeFile.Size != afterFile.Size ||
-			beforeFile.Mode != afterFile.Mode {
+			beforeFile.Mode != afterFile.Mode ||
+			beforeFile.Hash != afterFile.Hash {
 			changes.Modified = append(changes.Modified, afterFile)
 		}
 	}
