@@ -42,7 +42,7 @@ func (r NPMRegistry) client() *http.Client {
 }
 
 func (r NPMRegistry) Resolve(spec string) (PackageInfo, error) {
-	name, requested, err := parsePackageSpec(spec)
+	name, requested, err := ParsePackageSpec(spec)
 	if err != nil {
 		return PackageInfo{}, err
 	}
@@ -118,7 +118,8 @@ func (r NPMRegistry) Resolve(spec string) (PackageInfo, error) {
 	}, nil
 }
 
-func parsePackageSpec(spec string) (string, string, error) {
+// ParsePackageSpec separates a registry name from its optional version, range, or tag.
+func ParsePackageSpec(spec string) (string, string, error) {
 	trimmed := strings.TrimSpace(spec)
 	if trimmed == "" {
 		return "", "", fmt.Errorf("empty package specifier")
@@ -183,7 +184,8 @@ func (r NPMRegistry) Download(pkg PackageInfo) (string, error) {
 	}
 
 	hash := sha512.New()
-	gzipReader, err := gzip.NewReader(io.TeeReader(resp.Body, hash))
+	compressed := io.TeeReader(resp.Body, hash)
+	gzipReader, err := gzip.NewReader(compressed)
 	if err != nil {
 		os.RemoveAll(dir)
 		return "", fmt.Errorf("open gzip archive: %w", err)
@@ -193,6 +195,14 @@ func (r NPMRegistry) Download(pkg PackageInfo) (string, error) {
 	if err := extractNPMPackage(gzipReader, dir); err != nil {
 		os.RemoveAll(dir)
 		return "", err
+	}
+	if _, err := io.Copy(io.Discard, gzipReader); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("read gzip archive: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, compressed); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("read package archive: %w", err)
 	}
 	if err := verifyIntegrity(pkg.Integrity, hash.Sum(nil)); err != nil {
 		os.RemoveAll(dir)

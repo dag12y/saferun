@@ -63,7 +63,7 @@ saferun audit
 saferun audit --clear
 ```
 
-`saferun setup` checks Docker, verifies the sandbox image, and downloads it when necessary. The npm command analyzes the requested package before asking for approval to install it in the current project.
+`saferun setup` checks Docker, verifies the sandbox image, and downloads it when necessary. The npm command resolves and reviews the complete dependency tree before asking for approval to install it in the current project.
 
 ## Installing Project Dependencies
 
@@ -75,9 +75,11 @@ cd project
 saferun npm install
 ```
 
-SafeRun reads `package.json`, uses npm's resolver in a temporary scripts-disabled workspace when a lockfile is absent, analyzes the resolved lockfile packages and the full install inside Docker, produces an aggregate report, applies the security policy, and only then runs host-side `npm install` from the project directory. Existing `package-lock.json` files are used for deterministic package versions, and the project is backed up before installation.
+SafeRun stages the project and resolves a lockfile with scripts disabled. Project installs reuse an existing compatible lockfile. SafeRun verifies each registry tarball's integrity and runs `npm ci` in Docker against the staged lockfile. After approval it runs `npm ci --ignore-scripts` in a separate host staging directory against that same lockfile. It verifies the installed package identities and integrity records before replacing the project's dependencies. SafeRun snapshots the project's npm metadata and dependency tree before publishing so it can restore them if installation fails.
 
-Project mode currently requires npm lockfile version 2 or 3 for resolved packages and rejects dependency sources SafeRun cannot verify safely, including `file:`, `workspace:`, git, GitHub, tarball URL, and npm alias specifications. Symlinked project inputs are also rejected. These limitations are intentional: unsupported dependencies are blocked instead of being silently skipped.
+Host lifecycle scripts are disabled by default. When a dependency needs a host build, run `saferun npm install <package> --allow-host-scripts` and answer the separate confirmation for `npm rebuild`. Those scripts run with your account's filesystem access. `--ignore-scripts` also disables lifecycle scripts in Docker.
+
+Verified installation supports dependencies with SHA-512 integrity from the public npm registry and npm lockfile versions 2 and 3. Local directories, `file:`, workspaces, git, GitHub, standalone tarball URLs, npm aliases, project `.npmrc`, and npm shrinkwrap files are unsupported. Symlinked project inputs are also rejected.
 
 ## CLI Output
 
@@ -114,6 +116,8 @@ Use `--json` (or `--format=json`) when a script or CI/CD pipeline needs to consu
 saferun npm install express --json
 saferun npm install --format=sarif > saferun.sarif
 ```
+
+Machine-readable modes scan only. Exit status `0` means the scan passed, `3` means the policy prevented an unattended install, and `1` means the scan failed. A policy block emits a report as well.
 
 Common npm install aliases (`saferun npm i <package>` and `saferun npm add <package>`) are also supported.
 
@@ -177,15 +181,30 @@ Create a `.saferunrc` JSON file in your project root (or `~/.saferunrc`, or poin
 }
 ```
 
+OSV checks apply to direct and transitive packages. If enabled and OSV is unavailable, the scan exits with an operational error. The `allowed_hosts` setting affects network findings after the sandbox run. Docker bridge networking permits outbound connections during the run.
+
 ## GitHub Action Integration
 
-Use the composite action in `.github/actions/saferun` to run SafeRun in CI and upload SARIF results to GitHub Code Scanning:
+The composite action runs SafeRun on a Linux runner with Docker and `jq`. It builds SafeRun from the action's revision by default. The following workflow job checks a project and uploads findings to GitHub Code Scanning.
 
 ```yaml
-- uses: ./github/actions/saferun
-  with:
-    upload-sarif: "true"
+jobs:
+  saferun:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: ./.github/actions/saferun
+        with:
+          upload-sarif: "true"
 ```
+
+For a workflow in another repository, reference `dag12y/saferun/.github/actions/saferun@<commit-sha>` and set up Go for that SafeRun revision. You can also set `saferun-version` to an existing release with the action's exit-code contract. A policy block uploads the report before failing the job. Setup failures and failed analyses stop the job with their own error messages. The `sarif-file` input defaults to `saferun.sarif` and accepts a path under the checked-out workspace with an existing parent directory.
 
 ## Supported Platforms
 
@@ -254,7 +273,7 @@ saferun --version
 
 ### Manual GitHub Release Installation
 
-Download the binary for your platform and `SHA256SUMS` from the [SafeRun v1.1.0 release](https://github.com/dag12y/saferun/releases/tag/v1.1.0). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
+Download the binary for your platform and `SHA256SUMS` from the [SafeRun v2.0.0 release](https://github.com/dag12y/saferun/releases/tag/v2.0.0). Verify the binary against `SHA256SUMS`, then install it as `~/.local/bin/saferun`:
 
 ```bash
 mkdir -p ~/.local/bin
@@ -271,14 +290,14 @@ To update, run the installer again. To remove SafeRun, delete `%LOCALAPPDATA%\Sa
 
 Configuration variables:
 
-- `SAFERUN_VERSION`: release tag, such as `v1.1.0`
+- `SAFERUN_VERSION`: release tag, such as `v2.0.0`
 - `SAFERUN_RELEASE_BASE_URL`: HTTPS release base URL; defaults to `https://github.com/dag12y/saferun/releases/download`
 - `SAFERUN_INSTALL_DIR`: per-user installation directory; defaults to `%LOCALAPPDATA%\SafeRun\bin`
 
 For example, to install a specific Windows release:
 
 ```powershell
-$env:SAFERUN_VERSION = 'v1.1.0'
+$env:SAFERUN_VERSION = 'v2.0.0'
 $env:SAFERUN_INSTALL_DIR = "$env:LOCALAPPDATA\SafeRun\bin"
 irm https://www.saferun.tech/install.ps1 | iex
 ```
@@ -294,11 +313,11 @@ If the command is not found after installation, open a new terminal so the updat
 - ✓ Security reports
 - ✓ Cross-platform installers
 - ✓ Audit management
+- ✓ GitHub Action integration
 
 ### Future
 
 - More package managers
-- GitHub Action integration
 - AI-powered security explanations
 
 See [ROADMAP.md](ROADMAP.md) for the public roadmap.

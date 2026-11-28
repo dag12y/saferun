@@ -1,19 +1,21 @@
 package package_manager
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/dag12y/saferun/internal/analyzer"
 	"github.com/dag12y/saferun/internal/audit"
 	"github.com/dag12y/saferun/internal/cli"
 	"github.com/dag12y/saferun/internal/config"
-	"github.com/dag12y/saferun/internal/osv"
 	"github.com/dag12y/saferun/internal/policy"
 	"github.com/dag12y/saferun/internal/prompt"
 	"github.com/dag12y/saferun/internal/registry"
@@ -24,7 +26,10 @@ import (
 	"github.com/dag12y/saferun/internal/version"
 )
 
+var ErrPolicyBlocked = errors.New("security policy blocks installation")
+
 type NPM struct {
+	preparePlan    func(string, InstallArgs, bool) (*installPlan, error)
 	Sandbox        sandbox.Config
 	Registry       registry.NPMRegistry
 	ProjectDir     string
@@ -41,11 +46,7 @@ type NPM struct {
 	BlockOnMedium  bool
 }
 
-func DefaultNPMInstaller(args []string) error {
-	return defaultNPMInstallerInDir("", args, false)
-}
-
-func defaultNPMInstallerInDir(projectDir string, args []string, jsonOutput bool) error {
+func defaultNPMInstallerInDir(projectDir string, args []string, quiet bool) error {
 	if err := validateHostInstallArgs(args); err != nil {
 		return err
 	}
@@ -59,15 +60,18 @@ func defaultNPMInstallerInDir(projectDir string, args []string, jsonOutput bool)
 		cmd.Dir = projectDir
 	}
 	cmd.Env = env
-	if jsonOutput {
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
+	var diagnostics bytes.Buffer
+	if quiet {
+		cmd.Stdout, cmd.Stderr = &diagnostics, &diagnostics
 	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
 	cmd.Stdin = os.Stdin
 	if err := cmd.Run(); err != nil {
+		if detail := strings.TrimSpace(diagnostics.String()); detail != "" {
+			return fmt.Errorf("npm %v: %w: %s", args, err, detail)
+		}
 		return fmt.Errorf("npm %v: %w", args, err)
 	}
 	return nil
@@ -221,10 +225,15 @@ func (n NPM) Install(args []string) error {
 	if n.Sandbox.Image == "" {
 		n.Sandbox.Image = sandbox.DefaultImage
 	}
+	args, allowHostScripts := extractHostScriptsOption(args)
+	if allowHostScripts && (machineOutput || slices.Contains(args, "--ignore-scripts")) {
+		return fmt.Errorf("--allow-host-scripts requires interactive installation with scripts enabled in the sandbox")
+	}
 	parsed, err := parseInstallArgsAllowEmpty(args)
 	if err != nil {
 		return err
 	}
+	parsed.Flags = normalizeInstallFlags(parsed.Flags)
 	projectMode := len(parsed.Packages) == 0
 	projectDir := n.ProjectDir
 	if projectMode {
@@ -232,7 +241,7 @@ func (n NPM) Install(args []string) error {
 			return err
 		}
 	}
-	if projectMode && projectDir == "" {
+	if projectDir == "" {
 		projectDir, err = os.Getwd()
 		if err != nil {
 			return fmt.Errorf("determine current project directory: %w", err)
@@ -244,7 +253,28 @@ func (n NPM) Install(args []string) error {
 		return err
 	}
 	analysisArgs := append([]string(nil), packageArgs...)
-	if projectMode {
+	preparePlan := n.preparePlan
+	if preparePlan == nil {
+		preparePlan = prepareInstallPlan
+	}
+	plan, err := preparePlan(projectDir, parsed, projectMode)
+	if err != nil {
+		return err
+	}
+	if plan != nil {
+		defer plan.cleanup()
+		if allowHostScripts && !plan.saveManifest && plan.packageJSON.data == nil {
+			return fmt.Errorf("--allow-host-scripts requires a project package.json")
+		}
+		n.Sandbox.ProjectDir = plan.dir
+		analysisArgs = make([]string, 0, len(plan.packages))
+		for _, pkg := range plan.packages {
+			analysisArgs = append(analysisArgs, packageSpec(pkg.Name, pkg.Version))
+		}
+		if projectMode {
+			packageArgs = plan.dependencyNames
+		}
+	} else if projectMode {
 		manifestPath := filepath.Join(projectDir, "package.json")
 		if _, statErr := os.Stat(manifestPath); statErr != nil {
 			if os.IsNotExist(statErr) {
@@ -310,11 +340,15 @@ func (n NPM) Install(args []string) error {
 	}
 	packageReports := make([]packageReport, 0, len(packageArgs))
 	allFindings := make([]risk.Finding, 0)
+	vulnCheck := n.CheckVulnsFunc
+	if !userCfg.OSVEnabled() {
+		vulnCheck = nil
+	}
 
-	for _, packageName := range analysisArgs {
+	for index, packageName := range analysisArgs {
 		var report packageReport
 
-		if isLocalPackagePath(packageName) {
+		if plan == nil && isLocalPackagePath(packageName) {
 			localPath, err := resolveLocalPackagePath(packageName)
 			if err != nil {
 				return err
@@ -337,9 +371,14 @@ func (n NPM) Install(args []string) error {
 				resolveFunc = n.Registry.Resolve
 			}
 
-			resolved, err := resolveFunc(packageName)
-			if err != nil {
-				return fmt.Errorf("failed to resolve package %q: %w", packageName, err)
+			var resolved registry.PackageInfo
+			if plan != nil {
+				resolved = plan.packages[index]
+			} else {
+				resolved, err = resolveFunc(packageName)
+				if err != nil {
+					return fmt.Errorf("failed to resolve package %q: %w", packageName, err)
+				}
 			}
 			report.Package = resolved
 			fmt.Printf("Package: %s@%s\n", report.Package.Name, report.Package.Version)
@@ -404,24 +443,12 @@ func (n NPM) Install(args []string) error {
 			})
 		}
 
-		if userCfg.OSVEnabled() && report.Package.Name != "" && report.Package.Version != "" {
-			vulnCheck := n.CheckVulnsFunc
-			if vulnCheck == nil && n.ResolveFunc == nil {
-				osvClient := osv.DefaultClient()
-				vulnCheck = func(pkgName, pkgVer string) ([]risk.Finding, error) {
-					vulns, err := osvClient.QueryPackage(pkgName, pkgVer)
-					if err != nil {
-						return nil, err
-					}
-					return osv.ToRiskFindings(pkgName, pkgVer, vulns), nil
-				}
+		if vulnCheck != nil && report.Package.Name != "" && report.Package.Version != "" {
+			vulnFindings, err := vulnCheck(report.Package.Name, report.Package.Version)
+			if err != nil {
+				return fmt.Errorf("OSV vulnerability data unavailable for %s@%s: %w", report.Package.Name, report.Package.Version, err)
 			}
-			if vulnCheck != nil {
-				vulnFindings, vulnErr := vulnCheck(report.Package.Name, report.Package.Version)
-				if vulnErr == nil {
-					packageFindings = append(packageFindings, vulnFindings...)
-				}
-			}
+			packageFindings = append(packageFindings, vulnFindings...)
 		}
 
 		report.Findings = packageFindings
@@ -433,6 +460,9 @@ func (n NPM) Install(args []string) error {
 	fmt.Println("Starting sandbox...")
 
 	sandboxCommand := append([]string{"npm", "install"}, installArgs...)
+	if plan != nil {
+		sandboxCommand = append([]string{"npm"}, plan.ciArgs(slices.Contains(parsed.Flags, "--ignore-scripts"))...)
+	}
 	runner := n.SandboxRunner
 	if runner == nil {
 		runner = sandbox.Run
@@ -588,7 +618,7 @@ func (n NPM) Install(args []string) error {
 			return fmt.Errorf("encode SARIF report: %w", err)
 		}
 		if decision != policy.Allow {
-			return fmt.Errorf("security policy blocks installation: %s", reason)
+			return fmt.Errorf("%w: %s", ErrPolicyBlocked, reason)
 		}
 		return nil
 	}
@@ -606,18 +636,28 @@ func (n NPM) Install(args []string) error {
 				return fmt.Errorf("encode security report: %w", err)
 			}
 			if decision != policy.Allow {
-				return fmt.Errorf("security policy blocks installation: %s", reason)
+				return fmt.Errorf("%w: %s", ErrPolicyBlocked, reason)
 			}
 			return nil
 		}
+		primary := packageReports[0]
+		if plan != nil {
+			name, _, _ := registry.ParsePackageSpec(packageArgs[0])
+			for _, candidate := range packageReports {
+				if candidate.Package.Name == name && candidate.Package.Version == plan.directVersions[name] {
+					primary = candidate
+					break
+				}
+			}
+		}
 		securityReport := report.NewSecurityReport(
-			packageReports[0].Package.Name,
-			packageReports[0].Package.Version,
+			primary.Package.Name,
+			primary.Package.Version,
 			result,
 			behaviorFindings,
 			processFindings,
 			expectedConnections,
-			packageReports[0].FileFindings,
+			primary.FileFindings,
 			decision,
 		)
 		if policyErr != nil {
@@ -627,7 +667,7 @@ func (n NPM) Install(args []string) error {
 			return fmt.Errorf("encode security report: %w", err)
 		}
 		if decision != policy.Allow {
-			return fmt.Errorf("security policy blocks installation: %s", reason)
+			return fmt.Errorf("%w: %s", ErrPolicyBlocked, reason)
 		}
 		return nil
 	}
@@ -674,111 +714,65 @@ func (n NPM) Install(args []string) error {
 		fmt.Println("Audit")
 		fmt.Println("-----")
 		fmt.Println(cli.Success("✓ Security event recorded"))
-		return fmt.Errorf("security policy blocks installation: %s", reason)
+		return fmt.Errorf("%w: %s", ErrPolicyBlocked, reason)
 	}
 
 	confirm := n.Prompt
 	if confirm == nil {
-		confirm = prompt.Confirm
+		confirm = prompt.NewConfirmer(os.Stdin, os.Stdout)
 	}
 	fmt.Println()
-	if projectMode {
-		if !confirm("Install project dependencies?") {
-			fmt.Println("Installation cancelled.")
-			auditEvent := audit.Event{
-				Packages: append([]string(nil), packageArgs...), Risk: string(result.Level), Score: result.Score,
-				FindingCount: result.FindingCount, Decision: decisionStatus, Approval: audit.ApprovalDeclined,
-				Installation: audit.InstallationNotRun, Verification: audit.VerificationNotRun,
-				Reason: "User declined installation.",
-			}
-			loggerRecord(logger, auditContext(auditEvent))
-			return nil
-		}
-	} else if len(packageReports) > 1 {
-		if !confirm(fmt.Sprintf("Install %d packages in your project?", len(packageReports))) {
-			fmt.Println("Installation cancelled.")
-			auditEvent := audit.Event{
-				Packages:     append([]string(nil), packageArgs...),
-				Risk:         string(result.Level),
-				Score:        result.Score,
-				FindingCount: result.FindingCount,
-				Decision:     decisionStatus,
-				Approval:     audit.ApprovalDeclined,
-				Installation: audit.InstallationNotRun,
-				Verification: audit.VerificationNotRun,
-				Reason:       "User declined installation.",
-			}
-			loggerRecord(logger, auditContext(auditEvent))
-			fmt.Println()
-			fmt.Println("Audit")
-			fmt.Println("-----")
-			fmt.Println("✓ Security event recorded")
-			return nil
-		}
-	} else {
-		if !confirm(fmt.Sprintf("Install %s@%s in your project?", packageReports[0].Package.Name, packageReports[0].Package.Version)) {
-			fmt.Println("Installation cancelled.")
-			auditEvent := audit.Event{
-				Packages:     append([]string(nil), packageArgs...),
-				Risk:         string(result.Level),
-				Score:        result.Score,
-				FindingCount: result.FindingCount,
-				Decision:     decisionStatus,
-				Approval:     audit.ApprovalDeclined,
-				Installation: audit.InstallationNotRun,
-				Verification: audit.VerificationNotRun,
-				Reason:       "User declined installation.",
-			}
-			loggerRecord(logger, auditContext(auditEvent))
-			fmt.Println()
-			fmt.Println("Audit")
-			fmt.Println("-----")
-			fmt.Println("✓ Security event recorded")
-			return nil
-		}
+	switch {
+	case projectMode:
+		fmt.Println("Ready to install project dependencies.")
+	default:
+		fmt.Printf("Ready to install %s.\n", strings.Join(packageArgs, ", "))
 	}
-
-	fmt.Println()
-	if projectMode {
-		fmt.Println("Installing project dependencies...")
-	} else if len(packageReports) > 1 {
-		fmt.Printf("Installing %d packages in your project...\n", len(packageReports))
-	} else {
-		fmt.Printf("Installing %s@%s in your project...\n", packageReports[0].Package.Name, packageReports[0].Package.Version)
+	if !confirm("Install the reviewed dependency tree?") {
+		fmt.Println("Installation cancelled.")
+		loggerRecord(logger, auditContext(audit.Event{
+			Packages: append([]string(nil), packageArgs...), Risk: string(result.Level), Score: result.Score,
+			FindingCount: result.FindingCount, Decision: decisionStatus, Approval: audit.ApprovalDeclined,
+			Installation: audit.InstallationNotRun, Verification: audit.VerificationNotRun,
+			Reason: "User declined installation.",
+		}))
+		return nil
 	}
+	runHostScripts := allowHostScripts && confirm("Run dependency build scripts on the host? They will have your account's filesystem access.")
 	installer := n.RealInstaller
-	if installer == nil {
-		if projectMode {
-			installer = func(installArgs []string) error { return defaultNPMInstallerInDir(projectDir, installArgs, n.JSON) }
-		} else {
-			installer = DefaultNPMInstaller
+	if plan != nil {
+		if err := plan.checkOriginal(projectDir); err != nil {
+			return err
 		}
-	}
-	if projectDir == "" {
-		projectDir, err = os.Getwd()
+		hostTree, err := plan.prepareHostTree(projectDir)
 		if err != nil {
-			auditEvent := audit.Event{
-				Packages:     append([]string(nil), packageArgs...),
-				Risk:         string(result.Level),
-				Score:        result.Score,
-				FindingCount: result.FindingCount,
-				Decision:     decisionStatus,
-				Approval:     audit.ApprovalAccepted,
-				Installation: audit.InstallationFailed,
-				Verification: audit.VerificationNotRun,
-				Rollback:     audit.RollbackNotRequired,
-				Reason:       fmt.Sprintf("verification setup failed: %v", err),
+			return fmt.Errorf("stage reviewed dependencies: %w", err)
+		}
+		defer os.RemoveAll(hostTree)
+		unlock, err := lockProjectPublication(projectDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		if err := plan.checkOriginal(projectDir); err != nil {
+			return err
+		}
+		installer = func([]string) error {
+			if err := plan.publish(projectDir, hostTree); err != nil {
+				return err
 			}
-			loggerRecord(logger, auditContext(auditEvent))
-			fmt.Println()
-			fmt.Println("Audit")
-			fmt.Println("-----")
-			fmt.Println("✓ Security event recorded")
-			return fmt.Errorf("resolve project directory for verification: %w", err)
+			if runHostScripts {
+				return defaultNPMInstallerInDir(projectDir, []string{"rebuild", "--ignore-scripts=false"}, false)
+			}
+			return nil
+		}
+	} else if installer == nil {
+		installer = func(args []string) error {
+			return defaultNPMInstallerInDir(projectDir, args, false)
 		}
 	}
 
-	backup, backupErr := createProjectBackupMode(projectDir, packageArgs, projectMode)
+	backup, backupErr := createProjectBackup(projectDir)
 	if backupErr != nil {
 		auditEvent := audit.Event{
 			Packages:     append([]string(nil), packageArgs...),
@@ -801,6 +795,11 @@ func (n NPM) Install(args []string) error {
 		return fmt.Errorf("create project backup: %w", backupErr)
 	}
 
+	if plan != nil {
+		if err := plan.checkOriginal(projectDir); err != nil {
+			return errors.Join(err, backup.Cleanup())
+		}
+	}
 	if err := installer(append([]string{"install"}, installArgs...)); err != nil {
 		rollbackErr := backup.Restore()
 		auditEvent := audit.Event{
@@ -843,10 +842,20 @@ func (n NPM) Install(args []string) error {
 	}
 
 	verifier := InstallationVerifier{ProjectDir: projectDir}
-	verificationResult, verifyErr := verifier.Verify(packageArgs, parsed.Flags)
+	var verificationResult VerificationResult
+	var verifyErr error
+	if plan == nil {
+		verificationResult, verifyErr = verifier.Verify(packageArgs, parsed.Flags)
+	} else {
+		verifyErr = plan.verifyPublished(projectDir)
+		verificationResult = VerificationResult{Success: verifyErr == nil, LockfileVerified: plan.saveLock && verifyErr == nil}
+	}
 	fmt.Println()
 	fmt.Println("Installation Verification")
 	fmt.Println("-------------------------")
+	if plan != nil && verifyErr == nil {
+		fmt.Println("✓ Installed dependency tree matches the reviewed lockfile.")
+	}
 	for _, pkg := range verificationResult.Packages {
 		if !pkg.Installed {
 			fmt.Printf("✗ %s not installed\n", pkg.Name)
@@ -861,9 +870,14 @@ func (n NPM) Install(args []string) error {
 	fmt.Println("Lockfile")
 	fmt.Println("--------")
 	if _, err := os.Stat(filepath.Join(projectDir, "package-lock.json")); err == nil {
-		if verificationResult.LockfileVerified {
+		switch {
+		case verificationResult.LockfileVerified:
 			fmt.Println("✓ package-lock.json verified")
-		} else {
+		case plan != nil && !plan.saveLock:
+			fmt.Println("Existing package-lock.json preserved by request.")
+		case plan != nil:
+			fmt.Println("✗ Could not verify the installed dependency tree.")
+		default:
 			fmt.Println("✗ package-lock.json is invalid JSON")
 		}
 	} else {

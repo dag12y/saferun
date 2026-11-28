@@ -42,6 +42,7 @@ func TestNPMInstallRespectsSaferunrcAndSARIF(t *testing.T) {
 	defer func() { os.Stdout = origStdout }()
 
 	manager := NPM{
+		preparePlan: unplannedFixtureInstall,
 		ProjectDir:  projectDir,
 		AuditLogger: stubAuditLogger(t),
 		Format:      "sarif",
@@ -94,6 +95,7 @@ func TestNPMInstallSaferunrcAllowsHost(t *testing.T) {
 
 	installed := false
 	manager := NPM{
+		preparePlan: unplannedFixtureInstall,
 		ProjectDir:  projectDir,
 		AuditLogger: stubAuditLogger(t),
 		JSON:        true,

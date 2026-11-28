@@ -3,21 +3,19 @@ package prompt
 import (
 	"bufio"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 )
 
-func Confirm(message string) bool {
-	fmt.Printf("%s [y/N]: ", message)
-
-	reader := bufio.NewReader(os.Stdin)
-
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return false
+func NewConfirmer(input io.Reader, output io.Writer) func(string) bool {
+	reader := bufio.NewReader(input)
+	return func(message string) bool {
+		fmt.Fprintf(output, "%s [y/N]: ", message)
+		answer, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return false
+		}
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		return answer == "y" || answer == "yes"
 	}
-
-	input = strings.TrimSpace(strings.ToLower(input))
-
-	return input == "y" || input == "yes"
 }

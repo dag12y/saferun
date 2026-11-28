@@ -2,6 +2,17 @@
 
 All notable SafeRun releases are documented here.
 
+## v2.0.0
+
+- Resolve a single npm lockfile for sandbox analysis and host installation. Verify the downloaded tarballs and the installed dependency tree before publishing it.
+- Disable host lifecycle scripts by default. Use `--allow-host-scripts` and confirm separately to run `npm rebuild` on the host.
+- Require verifiable public npm registry artifacts. Local directories, workspaces, npm aliases, git dependencies, standalone tarball URLs, project `.npmrc`, and npm shrinkwrap files are unsupported.
+- Return exit code `3` for policy decisions that prevent installation. Machine-readable scans still emit a report on a policy block. Operational errors return `1`.
+- Scan direct and transitive npm dependencies with OSV. When checks are enabled, an OSV outage fails the scan.
+- Restore the full dependency tree on rollback, including existing transitive packages and npm `.bin` links. Remove lockfiles created by a failed install.
+- Harden GitHub Action input handling and validate SARIF before upload. The Action builds SafeRun from its own revision by default and supports an explicit release override.
+- Run a real npm and Docker integration test in CI and before release.
+
 ## v1.1.0
 
 - Added `.saferunrc` configuration support for sandbox limits, allowed network hosts, `block_on_medium`, and OSV checks

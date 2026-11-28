@@ -94,6 +94,15 @@ func (c Client) QueryPackage(name, version string) ([]Vulnerability, error) {
 	return result.Vulns, nil
 }
 
+// CheckPackage returns the risk findings from OSV for a resolved npm package.
+func (c Client) CheckPackage(name, version string) ([]risk.Finding, error) {
+	vulns, err := c.QueryPackage(name, version)
+	if err != nil {
+		return nil, err
+	}
+	return ToRiskFindings(name, version, vulns), nil
+}
+
 // ToRiskFindings converts OSV advisories into SafeRun risk findings.
 func ToRiskFindings(pkgName, version string, vulns []Vulnerability) []risk.Finding {
 	findings := make([]risk.Finding, 0, len(vulns))

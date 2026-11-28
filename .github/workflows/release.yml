@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -25,6 +25,15 @@ jobs:
 
       - name: Run Go vet
         run: go vet ./...
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Test GitHub Action and Docker install
+        run: |
+          bash tests/action.sh
+          bash tests/npm-e2e.sh
 
       - name: Build release binaries
         env:
@@ -59,10 +68,21 @@ jobs:
           cd dist
           sha256sum saferun-* > SHA256SUMS
 
+      - name: Read release notes
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          awk -v version="$VERSION" '
+            /^## / { if (active) exit; active = ($2 == version); next }
+            active { print }
+          ' CHANGELOG.md > dist/RELEASE_NOTES.md
+          grep -q '[^[:space:]]' dist/RELEASE_NOTES.md
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: SafeRun ${{ github.ref_name }}
+          body_path: dist/RELEASE_NOTES.md
           tag_name: ${{ github.ref_name }}
           files: |
             dist/saferun-linux-amd64

@@ -21,7 +21,8 @@ Options:
     -h, --help         Show help
       --version        Show version information
       --json           Output security report as JSON
-      --format=<fmt>   Output format (json, sarif)
+      --format=<fmt>   Scan and output a report (json, sarif)
+      --allow-host-scripts  Ask separately before running npm rebuild on the host
   audit --all          Show all audit events
   audit --clear        Clear audit history
 `, version)

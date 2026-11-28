@@ -15,8 +15,9 @@ import (
 
 func TestNPMInstallJSONOutputIsMachineReadable(t *testing.T) {
 	manager := NPM{
-		JSON:    true,
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		JSON:        true,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			return registry.PackageInfo{Name: name, Version: "4.17.0"}, nil
 		},
@@ -84,7 +85,8 @@ func (fakeRegistry) Download(pkg registry.PackageInfo) (string, error) {
 func TestNPMInstallCancelledDoesNotRunRealInstall(t *testing.T) {
 	installerCalled := false
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			return registry.PackageInfo{Name: name, Version: "4.17.0", TarballURL: "https://example.invalid/package.tgz", Integrity: "sha512-test"}, nil
 		},
@@ -123,8 +125,9 @@ func TestNPMInstallApprovedInvokesRealInstall(t *testing.T) {
 
 	installerArgs := []string(nil)
 	manager := NPM{
-		ProjectDir: projectDir,
-		Sandbox:    sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		ProjectDir:  projectDir,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			return registry.PackageInfo{Name: name, Version: "4.17.0", TarballURL: "https://example.invalid/package.tgz", Integrity: "sha512-test"}, nil
 		},
@@ -165,7 +168,8 @@ func TestNPMInstallApprovedInvokesRealInstall(t *testing.T) {
 func TestNPMInstallRegistryPackageStillResolvesNormally(t *testing.T) {
 	called := false
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			called = true
 			return registry.PackageInfo{Name: name, Version: "4.17.0", TarballURL: "https://example.invalid/package.tgz", Integrity: "sha512-test"}, nil
@@ -209,7 +213,8 @@ func TestNPMInstallRelativeLocalPackagePath(t *testing.T) {
 
 	called := false
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			called = true
 			return registry.PackageInfo{Name: name}, nil
@@ -238,7 +243,8 @@ func TestNPMInstallAbsoluteLocalPackagePath(t *testing.T) {
 
 	called := false
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			called = true
 			return registry.PackageInfo{Name: name}, nil
@@ -259,7 +265,8 @@ func TestNPMInstallAbsoluteLocalPackagePath(t *testing.T) {
 }
 
 func TestNPMInstallLocalPackageMissingPathReturnsUsefulError(t *testing.T) {
-	manager := NPM{Sandbox: sandbox.Config{Workspace: t.TempDir()}}
+	manager := NPM{
+		preparePlan: unplannedFixtureInstall, Sandbox: sandbox.Config{Workspace: t.TempDir()}}
 	if err := manager.Install([]string{"/definitely/not/here"}); err == nil {
 		t.Fatal("expected missing local package path to return an error")
 	}
@@ -267,7 +274,8 @@ func TestNPMInstallLocalPackageMissingPathReturnsUsefulError(t *testing.T) {
 
 func TestNPMInstallLocalPackageMissingPackageJSONReturnsUsefulError(t *testing.T) {
 	packageDir := t.TempDir()
-	manager := NPM{Sandbox: sandbox.Config{Workspace: t.TempDir()}}
+	manager := NPM{
+		preparePlan: unplannedFixtureInstall, Sandbox: sandbox.Config{Workspace: t.TempDir()}}
 	if err := manager.Install([]string{packageDir}); err == nil {
 		t.Fatal("expected local package without package.json to return an error")
 	}
@@ -280,7 +288,8 @@ func TestNPMInstallLocalPackageDoesNotCallRegistryResolver(t *testing.T) {
 	}
 
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			t.Fatalf("registry resolver should not be called for local package path %q", name)
 			return registry.PackageInfo{}, nil
@@ -295,4 +304,8 @@ func TestNPMInstallLocalPackageDoesNotCallRegistryResolver(t *testing.T) {
 	if err := manager.Install([]string{packageDir}); err != nil {
 		t.Fatalf("Install returned unexpected error: %v", err)
 	}
+}
+
+func unplannedFixtureInstall(string, InstallArgs, bool) (*installPlan, error) {
+	return nil, nil
 }

@@ -18,7 +18,7 @@ func TestCreateProjectBackupPreservesExistingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	backup, err := createProjectBackup(projectDir, nil)
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
 	}
@@ -35,16 +35,29 @@ func TestCreateProjectBackupPreservesExistingFile(t *testing.T) {
 
 func TestCreateProjectBackupTracksMissingFile(t *testing.T) {
 	projectDir := t.TempDir()
-	missingPath := filepath.Join(projectDir, "missing", "file.txt")
-	backup, err := createProjectBackup(projectDir, nil)
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
 	}
 	defer backup.Cleanup()
 
-	entry, ok := findEntry(backup, missingPath)
-	if ok && entry.Existed {
-		t.Fatal("missing file should not be marked as existing")
+	for _, name := range []string{"package-lock.json", "npm-shrinkwrap.json"} {
+		path := filepath.Join(backup.ProjectDir, name)
+		entry, ok := findEntry(backup, path)
+		if !ok || entry.Existed {
+			t.Fatalf("backup did not record %s as absent", name)
+		}
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := backup.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, name := range []string{"package-lock.json", "npm-shrinkwrap.json"} {
+		if _, err := os.Stat(filepath.Join(projectDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("newly created %s survived rollback: %v", name, err)
+		}
 	}
 }
 
@@ -55,7 +68,7 @@ func TestProjectBackupRestoreModifiedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	backup, err := createProjectBackup(projectDir, nil)
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
 	}
@@ -84,7 +97,7 @@ func TestProjectBackupRestoreDeletedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	backup, err := createProjectBackup(projectDir, []string{"lodash"})
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
 	}
@@ -101,7 +114,7 @@ func TestProjectBackupRestoreDeletedFile(t *testing.T) {
 
 func TestProjectBackupRemovesNewlyCreatedDirectory(t *testing.T) {
 	projectDir := t.TempDir()
-	backup, err := createProjectBackup(projectDir, []string{"chalk"})
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
 	}
@@ -134,33 +147,17 @@ func TestResolveRequestedPackageScoped(t *testing.T) {
 	}
 }
 
-func TestCollectBackupTargetsMultiplePackages(t *testing.T) {
-	projectDir := t.TempDir()
-	paths := collectBackupTargets(projectDir, []string{"lodash", "express"})
-	if len(paths) < 3 {
-		t.Fatalf("expected package.json and package dirs, got %d: %#v", len(paths), paths)
-	}
-	if !containsPath(paths, filepath.Join(projectDir, "package.json")) {
-		t.Fatal("package.json should be included")
-	}
-	if !containsPath(paths, filepath.Join(projectDir, "node_modules", "lodash")) {
-		t.Fatal("lodash package dir should be included")
-	}
-	if !containsPath(paths, filepath.Join(projectDir, "node_modules", "express")) {
-		t.Fatal("express package dir should be included")
-	}
-}
-
 func TestProjectBackupCleanupRemovesArtifacts(t *testing.T) {
 	projectDir := t.TempDir()
-	backup, err := createProjectBackup(projectDir, nil)
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
 	}
+	backupDir := backup.BackupDir
 	if err := backup.Cleanup(); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	if _, err := os.Stat(backup.BackupDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(backupDir); !os.IsNotExist(err) {
 		t.Fatal("backup directory should be removed after cleanup")
 	}
 }
@@ -176,8 +173,9 @@ func TestNPMInstallRollbackRestoresProjectOnVerificationFailure(t *testing.T) {
 
 	hadPrompt := false
 	manager := NPM{
-		ProjectDir: projectDir,
-		Sandbox:    sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		ProjectDir:  projectDir,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			return registry.PackageInfo{Name: name, Version: "4.18.1", TarballURL: "https://example.invalid/package.tgz", Integrity: "sha512-test"}, nil
 		},
@@ -260,7 +258,7 @@ func TestProjectBackupRestoreRejectsOutsideProjectPath(t *testing.T) {
 
 func TestProjectBackupRemovesTransitiveDependenciesWhenNodeModulesCreated(t *testing.T) {
 	projectDir := t.TempDir()
-	backup, err := createProjectBackup(projectDir, []string{"lodash"})
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
 	}
@@ -289,22 +287,27 @@ func TestProjectBackupRemovesTransitiveDependenciesWhenNodeModulesCreated(t *tes
 
 func TestProjectBackupPrunesNewTransitiveDependenciesPreservingExisting(t *testing.T) {
 	projectDir := t.TempDir()
-	for _, rel := range []string{
-		filepath.Join("node_modules", "existing-pkg", "package.json"),
-		filepath.Join("node_modules", "@org", "keep", "package.json"),
-	} {
-		full := filepath.Join(projectDir, rel)
+	const original = `{"name":"keep","version":"1.0.0"}`
+	changed := filepath.Join(projectDir, "node_modules", "existing-pkg", "package.json")
+	deleted := filepath.Join(projectDir, "node_modules", "@org", "keep", "package.json")
+	for _, full := range []string{changed, deleted} {
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(full, []byte(`{"name":"keep","version":"1.0.0"}`), 0o600); err != nil {
+		if err := os.WriteFile(full, []byte(original), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	backup, err := createProjectBackup(projectDir, []string{"lodash"})
+	backup, err := createProjectBackup(projectDir)
 	if err != nil {
 		t.Fatalf("createProjectBackup: %v", err)
+	}
+	if err := os.WriteFile(changed, []byte(`{"name":"keep","version":"2.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(deleted); err != nil {
+		t.Fatal(err)
 	}
 
 	for _, rel := range []string{
@@ -326,12 +329,10 @@ func TestProjectBackupPrunesNewTransitiveDependenciesPreservingExisting(t *testi
 		t.Fatalf("Restore: %v", err)
 	}
 
-	for _, keep := range []string{
-		filepath.Join(projectDir, "node_modules", "existing-pkg", "package.json"),
-		filepath.Join(projectDir, "node_modules", "@org", "keep", "package.json"),
-	} {
-		if _, err := os.Stat(keep); err != nil {
-			t.Fatalf("expected existing package %s to be preserved: %v", keep, err)
+	for _, keep := range []string{changed, deleted} {
+		data, err := os.ReadFile(keep)
+		if err != nil || string(data) != original {
+			t.Fatalf("expected existing package %s to be restored: data=%q error=%v", keep, data, err)
 		}
 	}
 	for _, removed := range []string{
@@ -346,6 +347,54 @@ func TestProjectBackupPrunesNewTransitiveDependenciesPreservingExisting(t *testi
 	}
 }
 
+func TestProjectBackupRestoresNodeModulesBinLink(t *testing.T) {
+	projectDir := t.TempDir()
+	nodeModules := filepath.Join(projectDir, "node_modules")
+	link := filepath.Join(nodeModules, ".bin", "example")
+	dst := filepath.Join("..", "example", "cli.js")
+	for _, dir := range []string{filepath.Dir(link), filepath.Join(nodeModules, "example")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(nodeModules, "example", "cli.js"), []byte("original"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dst, link); err != nil {
+		t.Fatal(err)
+	}
+
+	backup, err := createProjectBackup(projectDir)
+	if err != nil {
+		t.Fatalf("createProjectBackup: %v", err)
+	}
+	defer backup.Cleanup()
+
+	// A replacement link must be removed as a link during rollback.
+	newTarget := t.TempDir()
+	if err := os.WriteFile(filepath.Join(newTarget, "sentinel"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(nodeModules); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(newTarget, nodeModules); err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got, err := os.Readlink(link); err != nil || got != dst {
+		t.Fatalf("restored .bin link = %q, %v; want %q", got, err, dst)
+	}
+	if contents, err := os.ReadFile(link); err != nil || string(contents) != "original" {
+		t.Fatalf("restored .bin contents = %q, %v", contents, err)
+	}
+	if _, err := os.Stat(filepath.Join(newTarget, "sentinel")); err != nil {
+		t.Fatalf("replacement link target was modified: %v", err)
+	}
+}
+
 func findEntry(backup *ProjectBackup, target string) (backupEntry, bool) {
 	for _, entry := range backup.entries {
 		if entry.Path == target {
@@ -353,13 +402,4 @@ func findEntry(backup *ProjectBackup, target string) (backupEntry, bool) {
 		}
 	}
 	return backupEntry{}, false
-}
-
-func containsPath(paths []string, target string) bool {
-	for _, p := range paths {
-		if p == target {
-			return true
-		}
-	}
-	return false
 }
