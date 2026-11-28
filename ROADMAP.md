@@ -9,11 +9,13 @@ This roadmap describes the next areas of work for SafeRun. It is directional rat
 - ✓ Security reports
 - ✓ Cross-platform installers
 - ✓ Audit management
+- ✓ GitHub Action integration
 
 ## Next Priorities
 
+- Enforce sandbox egress policies during npm analysis
+
 - More package managers
-- GitHub Action integration
 - AI-powered security explanations
 
 ## Longer-Term Exploration

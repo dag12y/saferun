@@ -1,38 +1,33 @@
 package package_manager
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type ProjectBackup struct {
-	ProjectDir          string
-	BackupDir           string
-	wholeNodeModules    bool
-	nodeModulesDir      string
-	nodeModulesExisted  bool
-	existingNodeModules map[string]struct{}
-	entries             []backupEntry
+	ProjectDir string
+	BackupDir  string
+	entries    []backupEntry
 }
 
 type backupEntry struct {
 	Path       string
 	Existed    bool
-	IsDir      bool
 	BackupPath string
 }
 
-func createProjectBackup(projectDir string, packageSpecs []string) (*ProjectBackup, error) {
-	return createProjectBackupMode(projectDir, packageSpecs, false)
-}
-
-func createProjectBackupMode(projectDir string, packageSpecs []string, wholeNodeModules bool) (*ProjectBackup, error) {
+func createProjectBackup(projectDir string) (*ProjectBackup, error) {
 	absProjectDir, err := filepath.Abs(projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve project root: %w", err)
+	}
+	absProjectDir, err = filepath.EvalSymlinks(absProjectDir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect project root: %w", err)
 	}
 
 	backupDir, err := os.MkdirTemp("", "saferun-backup-")
@@ -40,184 +35,32 @@ func createProjectBackupMode(projectDir string, packageSpecs []string, wholeNode
 		return nil, fmt.Errorf("create backup directory: %w", err)
 	}
 
-	backup := &ProjectBackup{
-		ProjectDir:       absProjectDir,
-		BackupDir:        backupDir,
-		wholeNodeModules: wholeNodeModules,
-		nodeModulesDir:   filepath.Join(absProjectDir, "node_modules"),
-	}
-
-	if !wholeNodeModules {
-		existing, existed, err := snapshotTopLevelNodeModules(backup.nodeModulesDir)
+	backup := &ProjectBackup{ProjectDir: absProjectDir, BackupDir: backupDir}
+	// npm can update or remove existing transitive packages during named and project installs.
+	for _, name := range []string{"package.json", "package-lock.json", "npm-shrinkwrap.json", "node_modules"} {
+		entry, err := capturePath(absProjectDir, backupDir, filepath.Join(absProjectDir, name))
 		if err != nil {
-			_ = os.RemoveAll(backupDir)
-			return nil, err
-		}
-		backup.nodeModulesExisted = existed
-		backup.existingNodeModules = existing
-	}
-
-	paths := collectBackupTargetsMode(absProjectDir, packageSpecs, wholeNodeModules)
-	for _, target := range paths {
-		entry, err := capturePath(absProjectDir, backupDir, target)
-		if err != nil {
-			_ = os.RemoveAll(backupDir)
-			return nil, err
+			return nil, errors.Join(err, backup.Cleanup())
 		}
 		backup.entries = append(backup.entries, entry)
 	}
 	return backup, nil
 }
 
-func collectBackupTargets(projectDir string, packageSpecs []string) []string {
-	return collectBackupTargetsMode(projectDir, packageSpecs, false)
-}
-
-func collectBackupTargetsMode(projectDir string, packageSpecs []string, wholeNodeModules bool) []string {
-	seen := map[string]struct{}{}
-	result := make([]string, 0, len(packageSpecs)+4)
-	addPath := func(path string) {
-		if path == "" {
-			return
-		}
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return
-		}
-		if _, ok := seen[abs]; ok {
-			return
-		}
-		seen[abs] = struct{}{}
-		result = append(result, abs)
-	}
-
-	addPath(filepath.Join(projectDir, "package.json"))
-	if wholeNodeModules {
-		addPath(filepath.Join(projectDir, "node_modules"))
-	}
-	if lockfilePath := filepath.Join(projectDir, "package-lock.json"); fileExists(lockfilePath) {
-		addPath(lockfilePath)
-	}
-	for _, spec := range packageSpecs {
-		pkgName, _, err := resolveRequestedPackage(spec, projectDir)
-		if err != nil {
-			continue
-		}
-		addPath(filepath.Join(projectDir, "node_modules", pkgName))
-	}
-	return result
-}
-
 func (b *ProjectBackup) Restore() error {
-	if b == nil {
+	if b == nil || b.BackupDir == "" {
 		return nil
 	}
-	var errs []string
-	if !b.wholeNodeModules && b.nodeModulesDir != "" {
-		if err := b.pruneAddedNodeModules(); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
+	var restoreErrors []error
 	for _, entry := range b.entries {
 		if err := b.restoreEntry(entry); err != nil {
-			errs = append(errs, err.Error())
+			restoreErrors = append(restoreErrors, err)
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("restore project state: %s", strings.Join(errs, "; "))
+	if err := errors.Join(restoreErrors...); err != nil {
+		return fmt.Errorf("restore project state (backup at %q): %w", b.BackupDir, err)
 	}
-	if err := b.Cleanup(); err != nil {
-		return fmt.Errorf("cleanup backup after restore: %w", err)
-	}
-	return nil
-}
-
-func snapshotTopLevelNodeModules(nodeModulesDir string) (map[string]struct{}, bool, error) {
-	info, err := os.Lstat(nodeModulesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("inspect node_modules: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, true, nil
-	}
-
-	entries, err := os.ReadDir(nodeModulesDir)
-	if err != nil {
-		return nil, true, fmt.Errorf("list node_modules: %w", err)
-	}
-
-	existing := make(map[string]struct{}, len(entries))
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "@") && entry.IsDir() {
-			scopedEntries, err := os.ReadDir(filepath.Join(nodeModulesDir, name))
-			if err != nil {
-				return nil, true, fmt.Errorf("list scoped node_modules %s: %w", name, err)
-			}
-			existing[name] = struct{}{}
-			for _, scoped := range scopedEntries {
-				existing[name+"/"+scoped.Name()] = struct{}{}
-			}
-			continue
-		}
-		existing[name] = struct{}{}
-	}
-	return existing, true, nil
-}
-
-func (b *ProjectBackup) pruneAddedNodeModules() error {
-	if err := ensureInsideProject(b.ProjectDir, b.nodeModulesDir); err != nil {
-		return err
-	}
-	if !b.nodeModulesExisted {
-		if err := os.RemoveAll(b.nodeModulesDir); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove newly created node_modules: %w", err)
-		}
-		return nil
-	}
-
-	entries, err := os.ReadDir(b.nodeModulesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("list node_modules for rollback: %w", err)
-	}
-
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "@") && entry.IsDir() {
-			scopeDir := filepath.Join(b.nodeModulesDir, name)
-			if _, scopeExisted := b.existingNodeModules[name]; !scopeExisted {
-				if err := os.RemoveAll(scopeDir); err != nil {
-					return fmt.Errorf("remove added scope directory %s: %w", name, err)
-				}
-				continue
-			}
-			scopedEntries, err := os.ReadDir(scopeDir)
-			if err != nil {
-				return fmt.Errorf("list scoped node_modules %s for rollback: %w", name, err)
-			}
-			for _, scoped := range scopedEntries {
-				key := name + "/" + scoped.Name()
-				if _, ok := b.existingNodeModules[key]; !ok {
-					if err := os.RemoveAll(filepath.Join(scopeDir, scoped.Name())); err != nil {
-						return fmt.Errorf("remove added transitive package %s: %w", key, err)
-					}
-				}
-			}
-			continue
-		}
-		if _, ok := b.existingNodeModules[name]; !ok {
-			if err := os.RemoveAll(filepath.Join(b.nodeModulesDir, name)); err != nil {
-				return fmt.Errorf("remove added transitive package %s: %w", name, err)
-			}
-		}
-	}
-	return nil
+	return b.Cleanup()
 }
 
 func (b *ProjectBackup) Cleanup() error {
@@ -232,149 +75,110 @@ func (b *ProjectBackup) Cleanup() error {
 }
 
 func capturePath(projectDir, backupDir, target string) (backupEntry, error) {
-	cleanTarget, err := filepath.Abs(target)
-	if err != nil {
-		return backupEntry{}, fmt.Errorf("resolve path %q: %w", target, err)
-	}
-	if err := ensureInsideProject(projectDir, cleanTarget); err != nil {
+	if err := validateBackupTarget(projectDir, target); err != nil {
 		return backupEntry{}, err
 	}
 
-	entry := backupEntry{Path: cleanTarget}
-	info, err := os.Lstat(cleanTarget)
-	if err != nil {
-		if os.IsNotExist(err) {
-			entry.Existed = false
-			return entry, nil
-		}
-		return backupEntry{}, fmt.Errorf("stat %q: %w", cleanTarget, err)
-	}
-	entry.Existed = true
-	entry.IsDir = info.IsDir()
-	if info.Mode()&os.ModeSymlink != 0 {
-		return backupEntry{}, fmt.Errorf("refusing to back up symlink %q", cleanTarget)
-	}
-
-	relativePath, err := filepath.Rel(projectDir, cleanTarget)
-	if err != nil {
-		return backupEntry{}, fmt.Errorf("compute relative path for %q: %w", cleanTarget, err)
-	}
-	backupPath := filepath.Join(backupDir, relativePath)
-	entry.BackupPath = backupPath
-	if info.IsDir() {
-		if err := os.MkdirAll(backupPath, 0o755); err != nil {
-			return backupEntry{}, fmt.Errorf("create backup dir for %q: %w", cleanTarget, err)
-		}
-		if err := copyDirectory(cleanTarget, backupPath); err != nil {
-			return backupEntry{}, fmt.Errorf("copy directory %q to backup: %w", cleanTarget, err)
-		}
+	entry := backupEntry{Path: target}
+	info, err := os.Lstat(target)
+	if os.IsNotExist(err) {
 		return entry, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(backupPath), 0o755); err != nil {
-		return backupEntry{}, fmt.Errorf("create backup parent for %q: %w", cleanTarget, err)
+	if err != nil {
+		return backupEntry{}, fmt.Errorf("stat %q: %w", target, err)
 	}
-	if err := copyFile(cleanTarget, backupPath); err != nil {
-		return backupEntry{}, fmt.Errorf("copy file %q to backup: %w", cleanTarget, err)
+	if info.Mode()&os.ModeSymlink != 0 {
+		return backupEntry{}, fmt.Errorf("refusing to back up project entry symlink %q", target)
+	}
+
+	entry.Existed = true
+	entry.BackupPath = filepath.Join(backupDir, filepath.Base(target))
+	if err := copyBackupTree(target, entry.BackupPath); err != nil {
+		return backupEntry{}, fmt.Errorf("back up %q: %w", target, err)
 	}
 	return entry, nil
 }
 
 func (b *ProjectBackup) restoreEntry(entry backupEntry) error {
-	if err := ensureInsideProject(b.ProjectDir, entry.Path); err != nil {
+	if err := validateBackupTarget(b.ProjectDir, entry.Path); err != nil {
 		return err
 	}
-	if !entry.Existed {
-		if err := os.RemoveAll(entry.Path); err != nil {
-			return fmt.Errorf("remove newly created path %q: %w", entry.Path, err)
-		}
-		return nil
-	}
+	// RemoveAll unlinks a replacement symlink without removing its target.
 	if err := os.RemoveAll(entry.Path); err != nil {
 		return fmt.Errorf("clear path %q before restore: %w", entry.Path, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(entry.Path), 0o755); err != nil {
-		return fmt.Errorf("create parent dir for %q: %w", entry.Path, err)
-	}
-	if entry.IsDir {
-		if err := copyDirectory(entry.BackupPath, entry.Path); err != nil {
-			return fmt.Errorf("restore directory %q: %w", entry.Path, err)
+	if entry.Existed {
+		if err := copyBackupTree(entry.BackupPath, entry.Path); err != nil {
+			return fmt.Errorf("restore %q: %w", entry.Path, err)
 		}
-		return nil
-	}
-	if err := copyFile(entry.BackupPath, entry.Path); err != nil {
-		return fmt.Errorf("restore file %q: %w", entry.Path, err)
 	}
 	return nil
 }
 
-func ensureInsideProject(projectDir, candidate string) error {
-	absProject, err := filepath.Abs(projectDir)
-	if err != nil {
-		return fmt.Errorf("resolve project root: %w", err)
-	}
-	absCandidate, err := filepath.Abs(candidate)
-	if err != nil {
-		return fmt.Errorf("resolve candidate path: %w", err)
-	}
-	rel, err := filepath.Rel(absProject, absCandidate)
-	if err != nil {
-		return fmt.Errorf("compute relative path: %w", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == "" && absCandidate != absProject {
-		return fmt.Errorf("path escapes project root: %s", candidate)
+func validateBackupTarget(projectDir, target string) error {
+	if filepath.Dir(filepath.Clean(target)) != projectDir {
+		return fmt.Errorf("backup target must be directly inside the project root: %s", target)
 	}
 	return nil
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
+func copyBackupTree(src, dst string) error {
+	type directoryMode struct {
+		path string
+		mode os.FileMode
 	}
-	defer in.Close()
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return nil
-}
-
-func copyDirectory(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	var directories []directoryMode
+	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing to copy symlink %q", path)
 		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
 		}
 		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
+		switch {
+		case info.IsDir():
+			directories = append(directories, directoryMode{path: target, mode: info.Mode().Perm()})
+			return os.Mkdir(target, 0o700)
+		case info.Mode().IsRegular():
+			return copyBackupFile(path, target, info.Mode().Perm())
+		case info.Mode()&os.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		default:
+			return fmt.Errorf("unsupported file type for %q: %s", path, info.Mode())
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		if err := copyFile(path, target); err != nil {
-			return err
-		}
-		return os.Chmod(target, info.Mode())
 	})
+	if err != nil {
+		return err
+	}
+	for i := len(directories) - 1; i >= 0; i-- {
+		if err := os.Chmod(directories[i].path, directories[i].mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyBackupFile(src, dst string, mode os.FileMode) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, out.Close()) }()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Chmod(mode)
 }

@@ -26,6 +26,15 @@ jobs:
       - name: Run Go vet
         run: go vet ./...
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Test GitHub Action and Docker install
+        run: |
+          bash tests/action.sh
+          bash tests/npm-e2e.sh
+
       - name: Build release binaries
         env:
           CGO_ENABLED: "0"
@@ -59,10 +68,21 @@ jobs:
           cd dist
           sha256sum saferun-* > SHA256SUMS
 
+      - name: Read release notes
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          awk -v version="$VERSION" '
+            /^## / { if (active) exit; active = ($2 == version); next }
+            active { print }
+          ' CHANGELOG.md > dist/RELEASE_NOTES.md
+          grep -q '[^[:space:]]' dist/RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: SafeRun ${{ github.ref_name }}
+          body_path: dist/RELEASE_NOTES.md
           tag_name: ${{ github.ref_name }}
           files: |
             dist/saferun-linux-amd64

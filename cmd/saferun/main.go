@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/dag12y/saferun/internal/audit"
 	"github.com/dag12y/saferun/internal/cli"
+	"github.com/dag12y/saferun/internal/osv"
 	"github.com/dag12y/saferun/internal/package_manager"
 	"github.com/dag12y/saferun/internal/registry"
 	"github.com/dag12y/saferun/internal/sandbox"
@@ -156,15 +158,17 @@ func main() {
 			Registry: registry.NPMRegistry{
 				BaseURL: "https://registry.npmjs.org",
 			},
-			JSON:   command.JSON,
-			Format: command.Format,
+			CheckVulnsFunc: osv.DefaultClient().CheckPackage,
+			JSON:           command.JSON,
+			Format:         command.Format,
 		}
 
 		if err := manager.Install(command.Arguments); err != nil {
+			if errors.Is(err, package_manager.ErrPolicyBlocked) {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				os.Exit(3)
+			}
 			if command.JSON || command.Format == "sarif" {
-				if strings.HasPrefix(err.Error(), "security policy blocks installation:") {
-					os.Exit(1)
-				}
 				if command.JSON {
 					writeJSONError(err)
 				} else {

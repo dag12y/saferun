@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -36,6 +37,10 @@ type lockPackage struct {
 	Version              string            `json:"version"`
 	Resolved             string            `json:"resolved"`
 	Integrity            string            `json:"integrity"`
+	Optional             bool              `json:"optional"`
+	Dev                  bool              `json:"dev"`
+	DevOptional          bool              `json:"devOptional"`
+	Peer                 bool              `json:"peer"`
 	Link                 bool              `json:"link"`
 	Dependencies         map[string]string `json:"dependencies"`
 	DevDependencies      map[string]string `json:"devDependencies"`
@@ -276,10 +281,13 @@ func validateLockPackageEntry(key string, entry lockPackage) error {
 	if !strings.HasPrefix(key, "node_modules/") || strings.Contains(key, `\`) || strings.Contains(key, "//") {
 		return fmt.Errorf("unsupported package-lock.json package path %q", key)
 	}
-	name := packageNameFromLockKey(key)
-	if !validPackageName(name) {
-		return fmt.Errorf("invalid package name in package-lock.json path %q", key)
+	packages := strings.Split(strings.TrimPrefix(key, "node_modules/"), "/node_modules/")
+	for _, name := range packages {
+		if !validPackageName(name) {
+			return fmt.Errorf("invalid package name in package-lock.json path %q", key)
+		}
 	}
+	name := packages[len(packages)-1]
 	if entry.Name != "" && entry.Name != name {
 		return fmt.Errorf("package-lock.json path %q disagrees with package name %q", key, entry.Name)
 	}
@@ -296,17 +304,13 @@ func validateLockPackageEntry(key string, entry lockPackage) error {
 }
 
 func lockContainsPackage(packages map[string]lockPackage, name string) bool {
-	for key := range packages {
-		if key != "" && packageNameFromLockKey(key) == name {
-			return true
-		}
-	}
-	return false
+	_, found := packages["node_modules/"+name]
+	return found
 }
 
 func validateResolvedURL(value string) error {
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() != "registry.npmjs.org" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "registry.npmjs.org" || parsed.User != nil {
 		return fmt.Errorf("only https://registry.npmjs.org tarballs are supported")
 	}
 	return nil
@@ -324,21 +328,13 @@ func validateIntegrity(value string) error {
 	return nil
 }
 
+var npmNamePattern = regexp.MustCompile(`^(?:@[A-Za-z0-9~-][A-Za-z0-9._~-]*/)?[A-Za-z0-9~-][A-Za-z0-9._~-]*$`)
+
 func validPackageName(name string) bool {
-	if name == "" || strings.ContainsAny(name, "\\\t\r\n ") || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
-		return false
-	}
-	if strings.HasPrefix(name, "@") {
-		parts := strings.Split(name, "/")
-		return len(parts) == 2 && parts[0] != "@" && parts[1] != ""
-	}
-	return !strings.Contains(name, "/")
+	return !strings.HasPrefix(name, "-") && npmNamePattern.MatchString(name)
 }
 
 func packageSpec(name, version string) string {
-	if strings.HasPrefix(name, "@") {
-		return name + "@" + version
-	}
 	return name + "@" + version
 }
 
@@ -360,7 +356,7 @@ func copyProjectInputs(src, dst string) error {
 			}
 			return nil
 		}
-		if isSensitiveProjectInput(rel) {
+		if rel == publicationLockName || strings.HasPrefix(rel, hostStagePrefix) || isSensitiveProjectInput(rel) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -372,6 +368,9 @@ func copyProjectInputs(src, dst string) error {
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
 			return os.MkdirAll(target, 0o755)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported project input %q", rel)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err

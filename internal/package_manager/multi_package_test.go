@@ -42,7 +42,8 @@ func TestNPMInstallMultiplePackagesReportsAllPackages(t *testing.T) {
 	}
 
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			if name == "lodash" {
 				return registry.PackageInfo{Name: "lodash", Version: "4.18.1", TarballURL: "https://example.invalid/lodash.tgz", Integrity: "sha512-lodash"}, nil
@@ -116,7 +117,8 @@ func TestNPMInstallApprovalAfterAnalysis(t *testing.T) {
 
 	promptCalled := false
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			return registry.PackageInfo{Name: name, Version: "1.0.0", TarballURL: "https://example.invalid/package.tgz", Integrity: "sha512-test"}, nil
 		},
@@ -175,7 +177,8 @@ func TestNPMInstallPreservesOriginalArguments(t *testing.T) {
 
 	installerArgs := []string(nil)
 	manager := NPM{
-		Sandbox: sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		ResolveFunc: func(name string) (registry.PackageInfo, error) {
 			return registry.PackageInfo{Name: name, Version: "1.0.0", TarballURL: "https://example.invalid/package.tgz", Integrity: "sha512-test"}, nil
 		},

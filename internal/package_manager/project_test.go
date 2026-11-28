@@ -67,9 +67,10 @@ func TestNPMInstallProjectJSONOutput(t *testing.T) {
 	})
 
 	manager := NPM{
-		JSON:       true,
-		ProjectDir: dir,
-		Sandbox:    sandbox.Config{Workspace: t.TempDir()},
+		preparePlan: unplannedFixtureInstall,
+		JSON:        true,
+		ProjectDir:  dir,
+		Sandbox:     sandbox.Config{Workspace: t.TempDir()},
 		DownloadFunc: func(pkg registry.PackageInfo) (string, error) {
 			packageDir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(packageDir, "package.json"), []byte(`{"name":"lodash","version":"4.17.21"}`), 0o600); err != nil {

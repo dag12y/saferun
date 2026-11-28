@@ -1,56 +1,17 @@
 # SafeRun Sandbox Security Model
 
-## Principle
+SafeRun stages the project and runs npm against a verified lockfile in a disposable Docker container. The staged project is the writable workspace. The host project and its existing dependencies remain outside that mount.
 
-SafeRun executes package installation in an isolated environment and follows a default-deny security model.
+## Current controls
 
-## Current Controls
+- Docker drops all capabilities and sets `no-new-privileges`.
+- CPU, memory, and process limits constrain resource use. The container root filesystem is read-only, with a restricted writable temporary filesystem and a writable staged workspace.
+- SafeRun compares workspace snapshots and samples process and TCP activity during the install. Short-lived activity can fall between samples.
+- The default Docker bridge network permits outbound traffic. `network.allowed_hosts` affects how SafeRun classifies observed connections. Egress controls require network-layer enforcement.
+- Containers and temporary workspaces are removed after the scan.
 
-### Capability restriction
+## Host installation
 
-All Linux capabilities are dropped:
+After policy evaluation and approval, SafeRun installs with lifecycle scripts disabled using the reviewed lockfile. It verifies the staged host dependency tree before publishing it and restores npm metadata and dependencies if publishing or rebuilding fails.
 
-`--cap-drop=ALL`
-
-### Privilege escalation
-
-Privilege escalation is disabled:
-
-`--security-opt=no-new-privileges`
-
-### Network
-
-The initial sandbox uses:
-
-`--network=none`
-
-Network access will later be implemented through a controlled monitoring architecture.
-
-### Resources
-
-The sandbox has explicit CPU and memory limits.
-
-### Container lifecycle
-
-Containers are disposable and removed after execution using:
-
-`--rm`
-
-## Security Boundary
-
-Docker is currently used as the sandbox boundary.
-
-The project does not currently claim that Docker provides perfect protection against arbitrary malicious code.
-
-The sandbox will be progressively hardened and tested.
-
-## Future Controls
-
-- PID limits
-- Read-only root filesystem
-- Controlled writable workspace
-- Seccomp profile
-- AppArmor
-- Network monitoring
-- Filesystem monitoring
-- Process monitoring
+`--allow-host-scripts` requests a separate confirmation for `npm rebuild`. Opted-in scripts run outside Docker with the user's access. Rollback covers npm metadata and `node_modules`. Other filesystem effects and remote actions are outside that scope.

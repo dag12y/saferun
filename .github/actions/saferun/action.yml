@@ -6,7 +6,7 @@ inputs:
     required: false
     default: ""
   sarif-file:
-    description: "Path to write SARIF output"
+    description: "Workspace-relative path to write SARIF output"
     required: false
     default: "saferun.sarif"
   upload-sarif:
@@ -14,46 +14,56 @@ inputs:
     required: false
     default: "true"
   saferun-version:
-    description: "SafeRun release version to install"
+    description: "Optional SafeRun release version. By default, build from this action's revision."
     required: false
-    default: "v1.1.0"
+    default: ""
 
 runs:
   using: "composite"
   steps:
     - name: Install SafeRun
+      id: install
       shell: bash
       env:
         SAFERUN_VERSION: ${{ inputs.saferun-version }}
       run: |
-        curl -fsSL https://www.saferun.tech/install.sh | sh
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        install_dir=$(mktemp -d "${RUNNER_TEMP}/saferun-bin.XXXXXXXX")
+        cd "$GITHUB_ACTION_PATH/../../.."
+        if [[ -z "$SAFERUN_VERSION" ]]; then
+          go build -o "$install_dir/saferun" ./cmd/saferun
+        else
+          if [[ ! "$SAFERUN_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+            echo "Expected a SafeRun release version such as v1.2.0." >&2
+            exit 1
+          fi
+          SAFERUN_INSTALL_DIR="$install_dir" sh ./install.sh
+        fi
+        printf 'binary=%s\n' "$install_dir/saferun" >> "$GITHUB_OUTPUT"
 
     - name: Prepare SafeRun Sandbox
       shell: bash
-      run: saferun setup
+      env:
+        SAFERUN_BIN: ${{ steps.install.outputs.binary }}
+      run: '"$SAFERUN_BIN" setup'
 
     - name: Run SafeRun Analysis
       id: analyze
       shell: bash
-      continue-on-error: true
-      run: |
-        set -o pipefail
-        if [ -n "${{ inputs.packages }}" ]; then
-          saferun npm install ${{ inputs.packages }} --format=sarif > "${{ inputs.sarif-file }}"
-        else
-          saferun npm install --format=sarif > "${{ inputs.sarif-file }}"
-        fi
+      env:
+        SAFERUN_BIN: ${{ steps.install.outputs.binary }}
+        SAFERUN_PACKAGES: ${{ inputs.packages }}
+        SAFERUN_SARIF_FILE: ${{ inputs.sarif-file }}
+      run: bash "$GITHUB_ACTION_PATH/analyze.sh"
 
     - name: Upload SARIF to GitHub Security
-      if: ${{ inputs.upload-sarif == 'true' && always() && hashFiles(inputs.sarif-file) != '' }}
+      if: ${{ inputs.upload-sarif == 'true' && steps.analyze.outputs.sarif-file != '' }}
       uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: ${{ inputs.sarif-file }}
+        sarif_file: ${{ steps.analyze.outputs.sarif-file }}
 
     - name: Fail on Policy Block
-      if: ${{ steps.analyze.outcome == 'failure' }}
+      if: ${{ always() && steps.analyze.outputs.blocked == 'true' }}
       shell: bash
       run: |
-        echo "SafeRun security policy blocked the installation."
+        echo "SafeRun security policy blocked the installation." >&2
         exit 1
