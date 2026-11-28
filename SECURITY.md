@@ -19,10 +19,10 @@ The maintainers will acknowledge valid reports, investigate them, and coordinate
 
 Security fixes are currently focused on the latest stable release. Users should upgrade to the newest release before reporting or troubleshooting an issue.
 
-| Version        | Supported |
-| -------------- | --------- |
-| 1.0.x          | Yes       |
-| Older releases | No        |
+| Version               | Supported |
+| --------------------- | --------- |
+| Latest stable release | Yes       |
+| Earlier releases      | No        |
 
 ## Security Philosophy
 
