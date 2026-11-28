@@ -1,0 +1,59 @@
+name: Hosted SARIF smoke test
+on:
+  push:
+    branches: [validation/sarif-v2.0.0]
+
+jobs:
+  smoke:
+    name: SARIF ${{ matrix.scenario }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [clean, blocked, operational]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Prepare fixture
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          case "$SCENARIO" in
+            blocked) npm pkg set 'scripts.postinstall=node -e "require(\"node:fs\").writeFileSync(\".env.saferun-fixture\", \"fixture\")"' ;;
+            operational) printf '%s\n' '{invalid config' > .saferunrc ;;
+          esac
+      - id: scan
+        continue-on-error: true
+        uses: ./.github/actions/saferun
+        with:
+          sarif-file: smoke.sarif
+      - name: Check scenario result
+        if: always()
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          case "$SCENARIO" in
+            clean)
+              test "$OUTCOME" = success
+              jq -e '.runs[0].results | length == 0' smoke.sarif
+              ;;
+            blocked)
+              test "$OUTCOME" = failure
+              jq -e '.runs[0].results | any(.level == "error")' smoke.sarif
+              ;;
+            operational)
+              test "$OUTCOME" = failure
+              test ! -e smoke.sarif
+              ;;
+          esac
