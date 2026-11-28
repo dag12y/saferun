@@ -57,3 +57,26 @@ jobs:
               test ! -e smoke.sarif
               ;;
           esac
+
+  published-assets:
+    name: Verify published v2.0.0 assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: v2.0.0
+          persist-credentials: false
+      - name: Check all released binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_dir=$(mktemp -d)
+          gh release download v2.0.0 --pattern 'saferun-*' --pattern SHA256SUMS --dir "$asset_dir"
+          (cd "$asset_dir" && sha256sum -c SHA256SUMS)
+      - name: Run the default Linux installer
+        run: |
+          install_dir=$(mktemp -d)
+          SAFERUN_INSTALL_DIR="$install_dir" sh ./install.sh
+          test "$("$install_dir/saferun" --version)" = 'SafeRun v2.0.0'
